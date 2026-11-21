@@ -6,6 +6,8 @@ export default defineConfig({
   base: './',
   plugins: [
     react(),
+    // ARTIFACT=1 のときは試用ページ用（オフライン機能なしの1ファイル版）
+    !process.env.ARTIFACT &&
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg'],

@@ -33,7 +33,7 @@ input, textarea, select { font: inherit; color: var(--text); }
 .row > .btn { flex: 1; }
 
 /* ---------- 共通の部品 ---------- */
-.screen { min-height: 100dvh; padding-bottom: calc(96px + var(--safe-bottom)); }
+.screen { min-height: 100dvh; padding-bottom: calc(96px + var(--safe-bottom)); max-width: 720px; margin: 0 auto; }
 .topbar {
   position: sticky; top: 0; z-index: 10;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -121,6 +121,8 @@ input, textarea, select { font: inherit; color: var(--text); }
 .media-actions button:disabled { visibility: hidden; }
 .mic.rec { background: color-mix(in srgb, var(--danger) 25%, var(--surface)); border-color: var(--danger); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--danger) 25%, transparent); } }
+.confirm { padding: 14px; border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); border-radius: var(--radius); }
+.confirm p { margin: 0 0 10px; }
 .tagpicker { display: grid; gap: 10px; }
 .tag-input { display: flex; gap: 8px; }
 .tag-input input { padding: 8px 12px; border-radius: 999px; }

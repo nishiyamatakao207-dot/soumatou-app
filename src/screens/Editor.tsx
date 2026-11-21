@@ -20,6 +20,7 @@ export function Editor({ id }: { id?: string }) {
   const [knownTags, setKnownTags] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const cameraRef = useRef<HTMLInputElement>(null);
   const libraryRef = useRef<HTMLInputElement>(null);
 
@@ -81,7 +82,7 @@ export function Editor({ id }: { id?: string }) {
   }
 
   async function remove() {
-    if (!memory || !confirm('この思い出を削除しますか？（元に戻せません）')) return;
+    if (!memory) return;
     await deleteMemory(memory.id);
     history.back();
   }
@@ -179,11 +180,24 @@ export function Editor({ id }: { id?: string }) {
 
         {notice && <p className="error">{notice}</p>}
 
-        {memory && (
-          <button className="btn danger" onClick={remove}>
-            この思い出を削除
-          </button>
-        )}
+        {memory &&
+          (confirmDelete ? (
+            <div className="confirm">
+              <p>この思い出を削除しますか？元に戻せません。</p>
+              <div className="row">
+                <button className="btn" onClick={() => setConfirmDelete(false)}>
+                  やめる
+                </button>
+                <button className="btn danger" onClick={remove}>
+                  削除する
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button className="btn danger" onClick={() => setConfirmDelete(true)}>
+              この思い出を削除
+            </button>
+          ))}
       </main>
     </div>
   );
