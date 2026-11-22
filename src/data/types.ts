@@ -24,6 +24,8 @@ export interface MediaItem {
   thumb?: Blob;
   /** 撮影日時（わかった場合） */
   takenAt?: number;
+  /** この写真・動画へのコメント（その時の思い） */
+  caption?: string;
 }
 
 /** 走馬灯の絞り込み条件 */

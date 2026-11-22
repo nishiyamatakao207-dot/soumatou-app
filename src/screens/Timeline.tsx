@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { listMemories, listTags } from '../data/repository';
+import { getMedia, listMemories, listTags } from '../data/repository';
 import type { Memory } from '../data/types';
 import { FilterBar } from '../components/FilterBar';
 import { Thumb } from '../components/Thumb';
@@ -76,7 +76,7 @@ export function Timeline({ query }: { query: string }) {
                 </div>
                 <div className="card-body">
                   <div className="card-date">{formatDate(m.date)}</div>
-                  {m.text && <p className="card-text">{m.text}</p>}
+                  <CardText memory={m} />
                   {m.tags.length > 0 && <div className="card-tags">{m.tags.map((t) => `#${t}`).join(' ')}</div>}
                 </div>
               </button>
@@ -90,4 +90,14 @@ export function Timeline({ query }: { query: string }) {
       </button>
     </div>
   );
+}
+
+/** 一覧に出す文章：ひとこと、なければ最初の写真のコメント */
+function CardText({ memory }: { memory: Memory }) {
+  const [caption, setCaption] = useState<string>();
+  useEffect(() => {
+    if (!memory.text && memory.mediaIds[0]) getMedia(memory.mediaIds[0]).then((x) => setCaption(x?.caption));
+  }, [memory]);
+  const t = memory.text || caption;
+  return t ? <p className="card-text">{t}</p> : null;
 }

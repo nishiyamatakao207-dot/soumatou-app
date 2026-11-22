@@ -4,7 +4,7 @@ import type { MediaItem, Memory } from '../data/types';
 import { Thumb } from '../components/Thumb';
 import { TagPicker } from '../components/TagPicker';
 import { importFile } from '../lib/media';
-import { speechSupported, useSpeechInput } from '../lib/speech';
+import { VoiceText } from '../components/VoiceText';
 import { toLocalInput } from '../lib/format';
 
 const MAX_VIDEO_MB = 200;
@@ -46,8 +46,6 @@ export function Editor({ id }: { id?: string }) {
     if (taken.length) setDate(Math.min(...taken));
   }, [media, dateTouched]);
 
-  const speech = useSpeechInput((chunk) => setText((t) => (t ? `${t}${/[。！？\s]$/.test(t) ? '' : '。'}` : '') + chunk.trim()));
-
   async function onFiles(files: FileList | null) {
     if (!files?.length) return;
     setBusy(true);
@@ -67,13 +65,12 @@ export function Editor({ id }: { id?: string }) {
 
   async function save() {
     setBusy(true);
-    speech.stop();
     const now = Date.now();
     const m: Memory = memory
       ? { ...memory, text: text.trim(), tags, date }
       : { id: newId(), text: text.trim(), tags, date, mediaIds: [], createdAt: now, updatedAt: now };
     try {
-      await saveMemory(m, media);
+      await saveMemory(m, media.map((x) => ({ ...x, caption: x.caption?.trim() || undefined })));
       history.back();
     } catch (e) {
       setBusy(false);
@@ -113,15 +110,24 @@ export function Editor({ id }: { id?: string }) {
       <main className="form">
         <section>
           <h2 className="label">写真・動画</h2>
-          <div className="media-grid">
+          <div className="media-list">
             {media.map((m, i) => (
-              <div key={m.id} className="media-cell">
-                <Thumb item={m} />
-                <div className="media-actions">
-                  <button onClick={() => move(i, -1)} disabled={i === 0} aria-label="前へ">‹</button>
-                  <button onClick={() => setMedia((l) => l.filter((x) => x.id !== m.id))} aria-label="外す">×</button>
-                  <button onClick={() => move(i, 1)} disabled={i === media.length - 1} aria-label="後へ">›</button>
+              <div key={m.id} className="media-row">
+                <div className="media-cell">
+                  <Thumb item={m} />
+                  <div className="media-actions">
+                    <button onClick={() => move(i, -1)} disabled={i === 0} aria-label="前へ">‹</button>
+                    <button onClick={() => setMedia((l) => l.filter((x) => x.id !== m.id))} aria-label="外す">×</button>
+                    <button onClick={() => move(i, 1)} disabled={i === media.length - 1} aria-label="後へ">›</button>
+                  </div>
                 </div>
+                <VoiceText
+                  compact
+                  rows={3}
+                  value={m.caption ?? ''}
+                  onChange={(v) => setMedia((l) => l.map((x) => (x.id === m.id ? { ...x, caption: v } : x)))}
+                  placeholder="この写真のコメント（その時の思い）"
+                />
               </div>
             ))}
           </div>
@@ -139,22 +145,8 @@ export function Editor({ id }: { id?: string }) {
         </section>
 
         <section>
-          <h2 className="label">その時の気持ち</h2>
-          <textarea
-            value={text + (speech.interim ? (text ? '。' : '') + speech.interim : '')}
-            onChange={(e) => setText(e.target.value)}
-            readOnly={speech.listening}
-            rows={5}
-            placeholder="うれしかったこと、驚いたこと、子どもの一言…"
-          />
-          {speechSupported() ? (
-            <button className={`btn big mic ${speech.listening ? 'rec' : ''}`} onClick={speech.listening ? speech.stop : speech.start}>
-              {speech.listening ? '■ 吹き込みを終える' : '🎙 声で吹き込む'}
-            </button>
-          ) : (
-            <p className="muted small">このブラウザは音声入力に対応していません。キーボードのマイクボタンも使えます。</p>
-          )}
-          {speech.error && <p className="error small">{speech.error}</p>}
+          <h2 className="label">この思い出のひとこと（なくてもOK）</h2>
+          <VoiceText value={text} onChange={setText} rows={3} placeholder="思い出全体について。写真がない記録はここに書きます" />
         </section>
 
         <section>
