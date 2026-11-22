@@ -4,6 +4,7 @@ import type { MediaItem, Memory } from '../data/types';
 import { describeFilter, filterFromQuery, toMemoryFilter } from '../lib/filter';
 import { formatDate } from '../lib/format';
 import { useObjectUrl } from '../lib/useObjectUrl';
+import { FeatherImage } from '../components/FeatherImage';
 
 /* 走馬灯：写真が左から右へゆっくり流れていく。
  * 1枚ずつ中央で少し止まり（ゆっくり漂う）、その間だけ下にコメントがフェードインする。
@@ -95,12 +96,12 @@ export function Player({ query }: { query: string }) {
     itemEls.current.forEach((el, n) => {
       const d = p - n; // 0 で中央。正なら右側、負なら左側
       const ad = Math.abs(d);
-      const x = d * slot;
+      const x = Math.round(d * slot * 10) / 10;
       const blur = Math.min(16, ad * 16);
       const scale = 1 - Math.min(0.14, ad * 0.12);
-      el.style.transform = `translate3d(calc(-50% + ${x}px), -50%, 0) scale(${scale})`;
+      el.style.transform = `translate3d(${(x - size.w / 2).toFixed(1)}px, -50%, 0) scale(${scale.toFixed(3)})`;
       el.style.filter = blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : 'none';
-      el.style.opacity = String(Math.max(0, 1 - ad * 0.7));
+      el.style.opacity = Math.max(0, 1 - ad * 0.7).toFixed(3);
     });
   }, [size]);
 
@@ -305,6 +306,7 @@ export function Player({ query }: { query: string }) {
           >
             <FlowMedia
               slide={slides[n]}
+              width={size.w}
               height={size.h}
               videoRef={(v) => {
                 if (v) videoEls.current.set(n, v);
@@ -360,12 +362,14 @@ function Backdrop({ slide }: { slide: Slide }) {
 
 function FlowMedia({
   slide,
+  width,
   height,
   videoRef,
   onTime,
   onEnded,
 }: {
   slide: Slide;
+  width: number;
   height: number;
   videoRef: (v: HTMLVideoElement | null) => void;
   onTime: () => void;
@@ -376,17 +380,17 @@ function FlowMedia({
   return (
     <div className="flow-frame">
       {!media && (
-        <div className="flow-text" style={{ maxHeight: height }}>
+        <div className="flow-text" style={{ maxHeight: height, width }}>
           {slide.memory.text}
         </div>
       )}
-      {media?.kind === 'photo' && src && <img className="flow-photo" src={src} alt="" style={{ maxHeight: height }} />}
+      {media?.kind === 'photo' && src && <FeatherImage src={src} maxW={width} maxH={height} />}
       {media?.kind === 'video' && src && (
         <video
           ref={videoRef}
-          className="flow-photo"
+          className="flow-video"
           src={src}
-          style={{ maxHeight: height }}
+          style={{ maxHeight: height, maxWidth: width }}
           playsInline
           onTimeUpdate={onTime}
           onEnded={onEnded}

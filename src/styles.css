@@ -163,14 +163,10 @@ input, textarea, select { font: inherit; color: var(--text); }
 /* 流れる写真 */
 .flow-item { position: absolute; left: 50%; top: 46%; display: flex; flex-direction: column; align-items: center; gap: 18px;
   will-change: transform, filter, opacity; }
-.flow-frame { width: 100%; display: flex; align-items: center; justify-content: center; }
-.flow-photo { max-width: 100%; object-fit: contain; display: block;
-  /* 写真の四辺を柔らかくぼかして、背景に溶け込ませる */
-  --feather: linear-gradient(to right, transparent, #000 9%, #000 91%, transparent),
-             linear-gradient(to bottom, transparent, #000 9%, #000 91%, transparent);
-  -webkit-mask-image: var(--feather); -webkit-mask-composite: source-in;
-          mask-image: var(--feather); mask-composite: intersect; }
-.flow-text { max-height: 100%; overflow: hidden; padding: 28px 24px; text-align: center; font-size: clamp(18px, 4.8vw, 24px); line-height: 1.8;
+.flow-frame { width: 100%; display: block; text-align: center; line-height: 0; }
+.flow-photo { display: inline-block; vertical-align: middle; }
+.flow-video { display: inline-block; vertical-align: middle; width: auto; height: auto; border-radius: 8px; }
+.flow-text { display: inline-block; overflow: hidden; line-height: 1.8; padding: 28px 24px; text-align: center; font-size: clamp(18px, 4.8vw, 24px); line-height: 1.8;
   color: #f6ead8; text-shadow: 0 0 18px rgba(255,210,150,.45); }
 
 /* 写真の下のコメント：止まった時にフェードイン、流れ出すとフェードアウト */
