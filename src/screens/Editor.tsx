@@ -1,17 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { deleteMemory, getMediaFor, getMemory, listTags, newId, saveMemory } from '../data/repository';
-import type { MediaItem, Memory } from '../data/types';
+import type { MediaDraft, Memory } from '../data/types';
 import { Thumb } from '../components/Thumb';
 import { TagPicker } from '../components/TagPicker';
 import { importFile } from '../lib/media';
 import { VoiceText } from '../components/VoiceText';
 import { toLocalInput } from '../lib/format';
 
-const MAX_VIDEO_MB = 200;
 
 export function Editor({ id }: { id?: string }) {
   const [memory, setMemory] = useState<Memory>();
-  const [media, setMedia] = useState<MediaItem[]>([]);
+  const [media, setMedia] = useState<MediaDraft[]>([]);
   const [text, setText] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [date, setDate] = useState(() => Date.now());
@@ -23,6 +22,9 @@ export function Editor({ id }: { id?: string }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const cameraRef = useRef<HTMLInputElement>(null);
   const libraryRef = useRef<HTMLInputElement>(null);
+  const replaceRef = useRef<HTMLInputElement>(null);
+  /** 差し替え中の写真ID */
+  const replacing = useRef<string | null>(null);
 
   useEffect(() => {
     listTags().then(setKnownTags);
@@ -50,16 +52,34 @@ export function Editor({ id }: { id?: string }) {
     if (!files?.length) return;
     setBusy(true);
     setNotice(undefined);
-    const added: MediaItem[] = [];
+    const added: MediaDraft[] = [];
+    const errors: string[] = [];
     for (const f of Array.from(files)) {
-      if (f.type.startsWith('video/') && f.size > MAX_VIDEO_MB * 1024 * 1024) {
-        setNotice(`${MAX_VIDEO_MB}MBを超える動画は追加できません（短めの動画がおすすめです）`);
-        continue;
+      try {
+        added.push(await importFile(f));
+      } catch (e) {
+        errors.push(e instanceof Error ? e.message : '読み込めないファイルがありました');
       }
-      const item = await importFile(f).catch(() => null);
-      if (item) added.push(item);
     }
     setMedia((m) => [...m, ...added]);
+    if (errors.length) setNotice([...new Set(errors)].join('\n'));
+    setBusy(false);
+  }
+
+  /** 見つからなくなった写真を、別のファイルで差し替える（コメントは残す） */
+  async function onReplace(files: FileList | null) {
+    const targetId = replacing.current;
+    replacing.current = null;
+    const f = files?.[0];
+    if (!f || !targetId) return;
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      const fresh = await importFile(f);
+      setMedia((list) => list.map((x) => (x.id === targetId ? { ...fresh, caption: x.caption } : x)));
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : '読み込めませんでした');
+    }
     setBusy(false);
   }
 
@@ -74,7 +94,13 @@ export function Editor({ id }: { id?: string }) {
       history.back();
     } catch (e) {
       setBusy(false);
-      setNotice(e instanceof Error && e.name === 'QuotaExceededError' ? '端末の保存容量が足りません' : '保存できませんでした');
+      setNotice(
+        e instanceof Error && (e.name === 'QuotaExceededError' || e.name === 'QuotaExceeded' || /quota/i.test(e.message))
+          ? '端末の保存容量が足りません'
+          : e instanceof Error && e.message.includes('保存に失敗')
+            ? e.message
+            : '保存できませんでした',
+      );
     }
   }
 
@@ -115,6 +141,19 @@ export function Editor({ id }: { id?: string }) {
               <div key={m.id} className="media-row">
                 <div className="media-cell">
                   <Thumb item={m} />
+                  {m.missing && (
+                    <button
+                      type="button"
+                      className="btn small replace-btn"
+                      onClick={() => {
+                        replacing.current = m.id;
+                        replaceRef.current?.click();
+                      }}
+                      disabled={busy}
+                    >
+                      差し替え
+                    </button>
+                  )}
                   <div className="media-actions">
                     <button onClick={() => move(i, -1)} disabled={i === 0} aria-label="前へ">‹</button>
                     <button onClick={() => setMedia((l) => l.filter((x) => x.id !== m.id))} aria-label="外す">×</button>
@@ -140,6 +179,7 @@ export function Editor({ id }: { id?: string }) {
             </button>
           </div>
           <input ref={cameraRef} type="file" accept="image/*,video/*" capture="environment" hidden onChange={(e) => (onFiles(e.target.files), (e.target.value = ''))} />
+          <input ref={replaceRef} type="file" accept="image/*,video/*" hidden onChange={(e) => (onReplace(e.target.files), (e.target.value = ''))} />
           <input ref={libraryRef} type="file" accept="image/*,video/*" multiple hidden onChange={(e) => (onFiles(e.target.files), (e.target.value = ''))} />
           {busy && <p className="muted small">読み込み中…</p>}
         </section>

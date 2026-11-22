@@ -1,18 +1,22 @@
 import exifr from 'exifr/dist/lite.esm.mjs';
 import { newId } from '../data/repository';
-import type { MediaItem } from '../data/types';
+import type { MediaDraft } from '../data/types';
 
 const PHOTO_MAX = 2048; // 保存する写真の長辺（容量節約）
 const THUMB_MAX = 480;
+export const MAX_VIDEO_MB = 100;
 
 /** 選んだファイルを、保存用のメディアに変換する */
-export async function importFile(file: File): Promise<MediaItem | null> {
-  if (file.type.startsWith('image/')) return importPhoto(file);
-  if (file.type.startsWith('video/')) return importVideo(file);
-  return null;
+export async function importFile(file: File): Promise<MediaDraft> {
+  if (file.type.startsWith('video/') || /\.(mov|mp4|m4v)$/i.test(file.name)) return importVideo(file);
+  return importPhoto(file);
 }
 
-async function importPhoto(file: File): Promise<MediaItem> {
+/**
+ * 写真はいつも JPEG にして保存する。
+ * iPhone の HEIC もここで JPEG に変換されるので、どの画面でも表示できる。
+ */
+async function importPhoto(file: File): Promise<MediaDraft> {
   let takenAt: number | undefined;
   try {
     const exif = await exifr.parse(file);
@@ -22,31 +26,59 @@ async function importPhoto(file: File): Promise<MediaItem> {
     /* EXIFなし */
   }
 
-  let blob: Blob = file;
-  let thumb: Blob | undefined;
+  const src = await decodeImage(file);
+  try {
+    const photo = await toJpeg(src.image, src.width, src.height, PHOTO_MAX, 0.86);
+    const thumb = await toJpeg(src.image, src.width, src.height, THUMB_MAX, 0.75);
+    return {
+      id: newId(),
+      memoryId: '',
+      kind: 'photo',
+      file: photo,
+      thumbFile: thumb,
+      hasThumb: true,
+      takenAt: takenAt ?? fallbackDate(file),
+    };
+  } finally {
+    src.close();
+  }
+}
+
+/** 画像を読み込む。まず createImageBitmap、だめなら <img>（Safari の HEIC 対応を使う） */
+async function decodeImage(file: Blob): Promise<{ image: CanvasImageSource; width: number; height: number; close(): void }> {
   try {
     const bmp = await createImageBitmap(file);
-    blob = (await resize(bmp, bmp.width, bmp.height, PHOTO_MAX, 0.85)) ?? file;
-    thumb = (await resize(bmp, bmp.width, bmp.height, THUMB_MAX, 0.75)) ?? undefined;
-    bmp.close();
+    return { image: bmp, width: bmp.width, height: bmp.height, close: () => bmp.close() };
   } catch {
-    /* 読めない形式（例：一部ブラウザでのHEIC）はそのまま保存 */
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      if (!img.naturalWidth) throw new Error('empty');
+      return { image: img, width: img.naturalWidth, height: img.naturalHeight, close: () => URL.revokeObjectURL(url) };
+    } catch {
+      URL.revokeObjectURL(url);
+      throw new Error('この写真の形式は読み込めませんでした');
+    }
   }
+}
 
+async function importVideo(file: File): Promise<MediaDraft> {
+  if (file.size > MAX_VIDEO_MB * 1024 * 1024) {
+    throw new Error(`${MAX_VIDEO_MB}MBを超える動画は追加できません（短めの動画がおすすめです）`);
+  }
+  const takenAt = (await readMp4CreationTime(file)) ?? fallbackDate(file);
+  const thumb = await videoFirstFrame(file).catch(() => undefined);
   return {
     id: newId(),
     memoryId: '',
-    kind: 'photo',
-    blob,
-    thumb,
-    takenAt: takenAt ?? fallbackDate(file),
+    kind: 'video',
+    file: new Blob([await file.arrayBuffer()], { type: file.type || 'video/mp4' }),
+    thumbFile: thumb,
+    hasThumb: !!thumb,
+    takenAt,
   };
-}
-
-async function importVideo(file: File): Promise<MediaItem> {
-  const takenAt = (await readMp4CreationTime(file)) ?? fallbackDate(file);
-  const thumb = await videoThumbnail(file).catch(() => undefined);
-  return { id: newId(), memoryId: '', kind: 'video', blob: file, thumb, takenAt };
 }
 
 function fallbackDate(file: File): number | undefined {
@@ -54,41 +86,65 @@ function fallbackDate(file: File): number | undefined {
   return file.lastModified || undefined;
 }
 
-function resize(src: CanvasImageSource, w: number, h: number, max: number, q: number) {
+function toJpeg(src: CanvasImageSource, w: number, h: number, max: number, q: number) {
   const scale = Math.min(1, max / Math.max(w, h));
   const canvas = document.createElement('canvas');
-  canvas.width = Math.round(w * scale);
-  canvas.height = Math.round(h * scale);
+  canvas.width = Math.max(1, Math.round(w * scale));
+  canvas.height = Math.max(1, Math.round(h * scale));
   canvas.getContext('2d')!.drawImage(src, 0, 0, canvas.width, canvas.height);
-  return new Promise<Blob | null>((ok) => canvas.toBlob(ok, 'image/jpeg', q));
+  return new Promise<Blob>((ok, ng) =>
+    canvas.toBlob((b) => (b && b.size ? ok(b) : ng(new Error('JPEGに変換できませんでした'))), 'image/jpeg', q),
+  );
 }
 
-function videoThumbnail(file: Blob): Promise<Blob | undefined> {
+/**
+ * 動画の最初のフレームを画像にする。
+ * iPhone は一度再生しないと映像を読み込まないので、消音で一瞬再生してから描く。
+ */
+function videoFirstFrame(file: Blob): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const v = document.createElement('video');
-    const done = (b?: Blob) => {
+    Object.assign(v.style, { position: 'fixed', left: '-10px', top: '-10px', width: '2px', height: '2px', opacity: '0', pointerEvents: 'none' });
+    let done = false;
+    const finish = (err?: Error, blob?: Blob) => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
+      v.pause();
+      v.removeAttribute('src');
+      v.load();
+      v.remove();
       URL.revokeObjectURL(url);
-      resolve(b);
+      if (blob) resolve(blob);
+      else reject(err ?? new Error('thumbnail'));
     };
-    const timer = setTimeout(() => done(undefined), 6000);
+    const timer = setTimeout(() => finish(new Error('timeout')), 8000);
+    const capture = async () => {
+      if (!v.videoWidth) return;
+      try {
+        finish(undefined, await toJpeg(v, v.videoWidth, v.videoHeight, THUMB_MAX, 0.75));
+      } catch (e) {
+        finish(e as Error);
+      }
+    };
     v.muted = true;
     v.playsInline = true;
+    v.setAttribute('playsinline', '');
     v.preload = 'auto';
     v.onloadeddata = () => {
-      v.currentTime = Math.min(0.5, (v.duration || 1) / 2);
+      v.currentTime = 0.05;
     };
-    v.onseeked = async () => {
-      if (!v.videoWidth) return done(undefined);
-      done((await resize(v, v.videoWidth, v.videoHeight, THUMB_MAX, 0.75)) ?? undefined);
-    };
-    v.onerror = () => {
-      clearTimeout(timer);
-      URL.revokeObjectURL(url);
-      reject(new Error('video'));
-    };
+    v.onseeked = capture;
+    v.onerror = () => finish(new Error('video'));
+    document.body.appendChild(v);
     v.src = url;
+    v.play()
+      .then(() => {
+        v.pause();
+        if (v.readyState >= 2) v.currentTime = 0.05;
+      })
+      .catch(() => {});
   });
 }
 

@@ -3,7 +3,8 @@ import { getMediaFor, listMemories } from '../data/repository';
 import type { MediaItem, Memory } from '../data/types';
 import { describeFilter, filterFromQuery, toMemoryFilter } from '../lib/filter';
 import { formatDate } from '../lib/format';
-import { useObjectUrl } from '../lib/useObjectUrl';
+import { useStoredUrl } from '../lib/useStoredUrl';
+import { thumbKey } from '../data/repository';
 import { FeatherImage } from '../components/FeatherImage';
 
 /* 走馬灯：写真が左から右へゆっくり流れていく。
@@ -355,9 +356,9 @@ export function Player({ query }: { query: string }) {
 
 /** 中央の写真を大きくぼかした背景（写真が変わるとゆっくり入れ替わる） */
 function Backdrop({ slide }: { slide: Slide }) {
-  const blob = slide.media?.kind === 'photo' ? slide.media.blob : slide.media?.thumb;
-  const src = useObjectUrl(blob);
-  return <div className="backdrop-wrap">{src && <img key={src} className="backdrop" src={src} alt="" />}</div>;
+  const m = slide.media;
+  const { url } = useStoredUrl(m && !m.missing && m.hasThumb ? thumbKey(m.id) : undefined);
+  return <div className="backdrop-wrap">{url && <img key={url} className="backdrop" src={url} alt="" />}</div>;
 }
 
 function FlowMedia({
@@ -375,17 +376,23 @@ function FlowMedia({
   onTime: () => void;
   onEnded: () => void;
 }) {
-  const src = useObjectUrl(slide.media?.blob);
   const media = slide.media;
+  const { url: src, missing } = useStoredUrl(media && !media.missing ? media.id : undefined);
+  const lost = !!media && (media.missing || missing);
   return (
     <div className="flow-frame">
+      {lost && (
+        <div className="flow-text missing" style={{ maxHeight: height, width }}>
+          画像が見つかりません
+        </div>
+      )}
       {!media && (
         <div className="flow-text" style={{ maxHeight: height, width }}>
           {slide.memory.text}
         </div>
       )}
-      {media?.kind === 'photo' && src && <FeatherImage src={src} maxW={width} maxH={height} />}
-      {media?.kind === 'video' && src && (
+      {!lost && media?.kind === 'photo' && src && <FeatherImage src={src} maxW={width} maxH={height} />}
+      {!lost && media?.kind === 'video' && src && (
         <video
           ref={videoRef}
           className="flow-video"

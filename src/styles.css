@@ -28,7 +28,7 @@ input, textarea, select { font: inherit; color: var(--text); }
 
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
-.error { color: var(--danger); }
+.error { color: var(--danger); white-space: pre-line; }
 .row { display: flex; gap: 10px; flex-wrap: wrap; }
 .row > .btn { flex: 1; }
 
@@ -120,7 +120,7 @@ input, textarea, select { font: inherit; color: var(--text); }
 .voicetext.compact textarea { min-height: 84px; padding: 10px; font-size: 15px; }
 .voicetext.compact .mic { justify-self: start; }
 .media-cell { position: relative; }
-.media-actions { position: absolute; inset: auto 4px 4px; display: flex; justify-content: space-between; }
+.media-actions { position: absolute; top: 4px; left: 4px; right: 4px; display: flex; justify-content: space-between; }
 .media-actions button { width: 28px; height: 28px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); font-size: 15px; line-height: 1; }
 .media-actions button:disabled { visibility: hidden; }
 .mic.rec { background: color-mix(in srgb, var(--danger) 25%, var(--surface)); border-color: var(--danger); animation: pulse 1.4s ease-in-out infinite; }
@@ -166,6 +166,7 @@ input, textarea, select { font: inherit; color: var(--text); }
 .flow-frame { width: 100%; display: block; text-align: center; line-height: 0; }
 .flow-photo { display: inline-block; vertical-align: middle; }
 .flow-video { display: inline-block; vertical-align: middle; width: auto; height: auto; border-radius: 8px; }
+.flow-text.missing { font-size: 15px; color: #c9b9a6; border: 1px dashed rgba(255,255,255,.25); border-radius: 12px; }
 .flow-text { display: inline-block; overflow: hidden; line-height: 1.8; padding: 28px 24px; text-align: center; font-size: clamp(18px, 4.8vw, 24px); line-height: 1.8;
   color: #f6ead8; text-shadow: 0 0 18px rgba(255,210,150,.45); }
 
@@ -196,3 +197,8 @@ input, textarea, select { font: inherit; color: var(--text); }
 @media (prefers-reduced-motion: reduce) {
   .bokeh { display: none; }
 }
+
+/* 中身が見つからない写真・動画 */
+.thumb.is-missing { border: 1px dashed color-mix(in srgb, var(--danger) 60%, transparent); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
+.thumb-missing { padding: 6px; font-size: 11px; line-height: 1.4; text-align: center; color: var(--danger); }
+.replace-btn { width: 100%; margin-top: 6px; }
