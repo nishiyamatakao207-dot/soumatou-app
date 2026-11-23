@@ -33,6 +33,8 @@ const SCALE = 2; // → 720 × 1280
 const W = LW * SCALE;
 const H = LH * SCALE;
 const FPS = 30;
+/** 画質（ビット毎秒）。ゆっくり動く映像なので控えめでもきれい。ファイルを小さくして共有しやすくする */
+const BITRATE = 3_000_000;
 const OPEN_MS = 700; // 最初の黒からのフェード
 const TAIL_MS = 600; // 最後の余韻
 
@@ -651,7 +653,7 @@ async function pickCodec(): Promise<string | null> {
   if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') return null;
   for (const codec of H264) {
     try {
-      const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate: 5_000_000, framerate: FPS });
+      const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate: BITRATE, framerate: FPS });
       if (r.supported) return codec;
     } catch {
       /* 次の候補へ */
@@ -693,7 +695,7 @@ async function encodeFast(r: Renderer, codec: string, onProgress: ExportOptions[
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
     error: (e) => (failure = e),
   });
-  encoder.configure({ codec, width: W, height: H, bitrate: 5_000_000, framerate: FPS, avc: { format: 'avc' } });
+  encoder.configure({ codec, width: W, height: H, bitrate: BITRATE, framerate: FPS, avc: { format: 'avc' } });
 
   const frames = Math.ceil((r.timing.total / 1000) * FPS);
   const began = performance.now();
@@ -733,7 +735,7 @@ async function recordRealtime(r: Renderer, onProgress: ExportOptions['onProgress
   await r.prepareFor(0);
   await r.draw(0);
   const stream = (r.canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(FPS);
-  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: BITRATE });
   const chunks: Blob[] = [];
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   const stopped = new Promise<void>((ok) => (rec.onstop = () => ok()));

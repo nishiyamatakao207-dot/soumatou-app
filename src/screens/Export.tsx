@@ -78,13 +78,25 @@ export function Export({ query }: { query: string }) {
 
   async function share() {
     if (!file) return;
+    setNotice(undefined);
     try {
-      await navigator.share({ files: [file], title: 'めぐる 思い出ムービー' });
+      // 動画だけを渡す（題名などを一緒に渡すと、動画を受け取らないアプリがあるため）
+      await navigator.share({ files: [file] });
     } catch (e) {
+      const name = e instanceof Error ? e.name : 'Error';
       // 共有メニューを閉じただけ（AbortError）のときは何もしない
-      if (!(e instanceof DOMException && e.name === 'AbortError')) setNotice('共有できませんでした。「端末に保存する」をお試しください。');
+      if (name === 'AbortError') return;
+      const reason =
+        name === 'NotAllowedError'
+          ? 'スマホが共有を許可しませんでした。動画が大きすぎる可能性があります。'
+          : name === 'DataError' || name === 'TypeError'
+            ? 'この動画の形式・大きさでは共有できませんでした。'
+            : '共有できませんでした。';
+      setNotice(`${reason}「端末に保存する」から保存して、写真アプリから共有してください。（理由コード：${name}）`);
     }
   }
+
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
   const count = slides?.length ?? 0;
   const working = phase.kind === 'working';
@@ -145,7 +157,7 @@ export function Export({ query }: { query: string }) {
           <section className="export-done">
             <video className="export-preview" src={phase.url} controls playsInline />
             <p className="muted small">
-              できあがり：{mmss(phase.result.durationSec)}・{(phase.result.blob.size / 1024 / 1024).toFixed(1)}MB
+              できあがり：長さ {mmss(phase.result.durationSec)}・大きさ {(phase.result.blob.size / 1024 / 1024).toFixed(1)}MB
             </p>
             {canShare && (
               <button className="btn primary big" onClick={share}>
@@ -156,6 +168,11 @@ export function Export({ query }: { query: string }) {
               端末に保存する
             </a>
             {!canShare && <p className="muted small">この画面からは共有メニューを開けません。保存してから、写真アプリなどで共有してください。</p>}
+            {isIOS && (
+              <p className="muted small">
+                iPhoneで「端末に保存する」を押すと「ファイル」アプリの「ダウンロード」に入ります。写真アプリに入れるには、「ファイル」アプリでその動画を開き、共有ボタン →「ビデオを保存」を選んでください。
+              </p>
+            )}
             <button className="btn ghost" onClick={() => setPhase({ kind: 'ready' })}>
               もう一度書き出す
             </button>
