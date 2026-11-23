@@ -15,7 +15,7 @@ import { CircleImage, CircleVideo } from '../components/Circle';
  * JavaScript は「いつ次へ進むか」だけを数える。 */
 
 const FADE_MS = 1800; // フェードの長さ（前後の写真が重なる時間）
-const PHOTO_MS = 5200; // 写真1枚の表示時間（コメントが短いとき）
+const PHOTO_MS = 7000; // 写真1枚の表示時間（次の写真が出始めるまでの間隔）
 const VIDEO_MAX_MS = 20000; // 動画はここまでで次へ
 const BG_FADE_MS = 2600; // 背景の色が移り変わる時間
 const COMMENT_SPACE = 150; // 写真の下にコメント用にあける高さ
@@ -29,7 +29,8 @@ interface Slide {
   comment: string;
 }
 
-const readingMs = (text: string) => Math.min(10000, Math.max(PHOTO_MS, 2600 + text.length * 120));
+/** 写真の表示時間。フェードで重なる分を足して、写真と写真の間隔がちょうど PHOTO_MS になるようにする */
+const photoDwell = () => PHOTO_MS + FADE_MS;
 
 /** スライドごとに毎回同じになる乱数（戻っても同じ位置に出る） */
 function seeded(key: string) {
@@ -79,6 +80,23 @@ function place(key: string, vw: number, vh: number): Placement {
   return { d, x, y, dx: Math.cos(ang) * DRIFT, dy: Math.sin(ang) * DRIFT, commentLeft: left - x, commentWidth };
 }
 
+/** 光の粒（40個）の大きさ・位置・動く速さ。毎回同じ配置になるよう固定の乱数で決める */
+const MOTE_COUNT = 40;
+const MOTES: React.CSSProperties[] = (() => {
+  const rnd = seeded('motes');
+  return Array.from({ length: MOTE_COUNT }, () => {
+    const size = 6 + Math.round(rnd() * rnd() * 34); // 小さい粒を多めに
+    return {
+      width: size,
+      height: size,
+      left: `${(rnd() * 104 - 2).toFixed(1)}%`,
+      top: `${(rnd() * 104 - 2).toFixed(1)}%`,
+      animationDuration: `${(11 + rnd() * 12).toFixed(1)}s`,
+      animationDelay: `${(-rnd() * 20).toFixed(1)}s`,
+    };
+  });
+})();
+
 function useViewport() {
   const get = () => ({ vw: window.innerWidth, vh: window.innerHeight });
   const [v, setV] = useState(get);
@@ -127,9 +145,9 @@ export function Player({ query }: { query: string }) {
   const dwellFor = useCallback(
     (i: number) => {
       const s = slides?.[i];
-      if (!s) return PHOTO_MS;
+      if (!s) return photoDwell();
       if (s.media?.kind === 'video') return VIDEO_MAX_MS;
-      return readingMs(s.comment);
+      return photoDwell();
     },
     [slides],
   );
@@ -298,13 +316,13 @@ export function Player({ query }: { query: string }) {
       ))}
       <div className="motes" aria-hidden="true">
         <div className="motes-a" style={{ color: curPalette.glow1 }}>
-          {Array.from({ length: 9 }, (_, k) => (
-            <span key={k} style={{ ['--k' as string]: k * 2 }} />
+          {MOTES.filter((_, k) => k % 2 === 0).map((m, k) => (
+            <span key={k} style={m} />
           ))}
         </div>
         <div className="motes-b" style={{ color: curPalette.glow2 }}>
-          {Array.from({ length: 8 }, (_, k) => (
-            <span key={k} style={{ ['--k' as string]: k * 2 + 1 }} />
+          {MOTES.filter((_, k) => k % 2 === 1).map((m, k) => (
+            <span key={k} style={m} />
           ))}
         </div>
       </div>
@@ -394,7 +412,7 @@ function SlideView({
   const media = slide.media;
   const { url, missing } = useStoredUrl(media && !media.missing ? media.id : undefined);
   const lost = !!media && (media.missing || missing);
-  const duration = media?.kind === 'video' ? VIDEO_MAX_MS : readingMs(slide.comment);
+  const duration = media?.kind === 'video' ? VIDEO_MAX_MS : photoDwell();
 
   return (
     <div className={`slide ${leaving ? 'out' : 'in'}`}>
