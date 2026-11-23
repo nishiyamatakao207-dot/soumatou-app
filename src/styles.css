@@ -277,3 +277,25 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
   background: linear-gradient(transparent, color-mix(in srgb, var(--bg) 92%, transparent) 35%); }
 .record-bar .voice-btn { flex: 1; max-width: 340px; font-size: 18px; min-height: 58px; border-radius: 999px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
 .record-bar .photo-btn { flex: none; min-height: 58px; border-radius: 999px; }
+
+/* ---- 今日のひとめぐり ---- */
+.digest-bar { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+.digest-title { flex: 1; min-width: 0; font-size: 15px; letter-spacing: .12em; color: #fff3df; text-shadow: 0 0 10px rgba(0,0,0,.7); }
+.digest-title span { display: block; font-size: 11px; letter-spacing: .06em; color: #d9cdbf; }
+.digest-bar .pill { flex: none; min-height: 40px; padding: 0 16px; border-radius: 999px; border: 0; background: rgba(0,0,0,.4); color: #fff3df; font-size: 14px; }
+.digest-bar .pill.skip { background: rgba(255,243,223,.9); color: #1f1609; font-weight: 600; }
+.digest-off { position: absolute; z-index: 10; right: 12px; bottom: calc(14px + var(--safe-bottom)); border: 0; background: none;
+  color: rgba(255,243,223,.6); font-size: 12px; text-decoration: underline; padding: 8px; }
+.ending-title.small { font-size: 20px; letter-spacing: .2em; }
+.setting { padding: 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
+.setting-row span { display: grid; gap: 2px; min-width: 0; }
+.setting-row small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.toggle { appearance: none; -webkit-appearance: none; flex: none; width: 50px; height: 30px; border-radius: 999px; background: var(--surface-2);
+  border: 1px solid var(--line); position: relative; cursor: pointer; transition: background .2s; }
+.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 50%; background: #f3ece4; transition: transform .2s; }
+.toggle:checked { background: var(--accent); border-color: var(--accent); }
+.toggle:checked::after { transform: translateX(20px); }
+.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.icon-btn { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface-2); font-size: 18px; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; }

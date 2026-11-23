@@ -12,9 +12,14 @@ export interface Settings {
   customBgmName: string;
   /** 前回の記録で使ったタグ（新しい記録で最初から選んでおく） */
   lastTags: string[];
+  /** アプリを開いたときに「今日のひとめぐり」を流す */
+  dailyDigest: boolean;
 }
 
-const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [] };
+const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true };
+
+/** 画面の外（起動時の判定など）から設定を読む */
+export const readSetting = <K extends keyof Settings>(key: K): Settings[K] => read()[key];
 const KEY = 'meguru.settings';
 
 function read(): Settings {

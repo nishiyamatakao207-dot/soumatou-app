@@ -3,6 +3,7 @@ import { listDatedItems, thumbKey } from '../data/repository';
 import { describeFilter, filterFromQuery, toMemoryFilter } from '../lib/filter';
 import { formatDate, formatDot } from '../lib/format';
 import { useSetting } from '../lib/settings';
+import { pickDigest } from '../lib/digest';
 import { navigate } from '../router';
 import { useStoredUrl } from '../lib/useStoredUrl';
 import { DEFAULT_PALETTE, extractPalette, type Palette } from '../lib/palette';
@@ -38,13 +39,19 @@ function useViewport() {
   return v;
 }
 
-export function Player({ query }: { query: string }) {
+/**
+ * 走馬灯の再生。
+ * digest：「今日のひとめぐり」（アプリを開いたときに自動で流す。音は最初は出さない）
+ */
+export function Player({ query, digest }: { query: string; digest?: boolean }) {
   const filter = useMemo(() => filterFromQuery(query), [query]);
   const [slides, setSlides] = useState<Slide[]>();
   const [memCount, setMemCount] = useState(0);
-  const [started, setStarted] = useState(false);
+  const [started, setStarted] = useState(!!digest);
   const [paused, setPaused] = useState(false);
-  const [muted, setMuted] = useState(false);
+  // 開いたときに勝手に音を出すことはできない（iPhone の決まり）ので、ひとめぐりは消音で始める
+  const [muted, setMuted] = useState(!!digest);
+  const [, setDailyDigest] = useSetting('dailyDigest');
   const [finished, setFinished] = useState(false);
   const [cur, setCur] = useState(0);
   const [prev, setPrev] = useState<number | null>(null);
@@ -61,8 +68,11 @@ export function Player({ query }: { query: string }) {
   useEffect(() => {
     (async () => {
       // 写真・動画1枚ごとの日付で、古い順に並べる
-      const list = buildSlides(await listDatedItems(toMemoryFilter(filter)));
+      const items = digest ? await pickDigest() : await listDatedItems(toMemoryFilter(filter));
+      if (digest && !items) return navigate('/', true);
+      const list = buildSlides(items ?? []);
       setMemCount(new Set(list.map((x) => x.memory.id)).size);
+      if (digest) clock.current = { t: 0, dwell: photoDwell(), leaving: false };
       setSlides(list);
     })();
   }, [filter]);
@@ -189,10 +199,26 @@ export function Player({ query }: { query: string }) {
   useEffect(() => bgm.current?.setMuted(muted), [muted]);
   useEffect(() => {
     if (finished) bgm.current?.fadeOut(2.5);
-  }, [finished]);
+    // ひとめぐりは、終わったら一覧へ
+    if (finished && digest) {
+      const t = setTimeout(() => navigate('/', true), 2600);
+      return () => clearTimeout(t);
+    }
+  }, [finished, digest]);
   // 音のある動画が流れている間は BGM を小さく
   const curIsVideo = slides?.[cur]?.media?.kind === 'video';
   useEffect(() => bgm.current?.duck(curIsVideo && !muted), [curIsVideo, muted]);
+
+  /** ひとめぐり：タップで音を出す（iPhone ではタップの中で音を起こす） */
+  const soundOn = () => {
+    setMuted(false);
+    if (!bgm.current && bgmChoice !== 'none') {
+      const p = new BgmPlayer();
+      p.unlock();
+      bgm.current = p;
+      void p.play(bgmChoice);
+    }
+  };
 
   const restart = () => {
     if (bgm.current) {
@@ -329,6 +355,22 @@ export function Player({ query }: { query: string }) {
         <div className="progress">
           <div ref={progressRef} className="progress-bar" />
         </div>
+        {digest ? (
+          <div className="digest-bar">
+            <div className="digest-title">
+              今日のひとめぐり
+              <span>過去の思い出から</span>
+            </div>
+            {muted && (
+              <button className="pill" onClick={soundOn}>
+                ♪ 音を出す
+              </button>
+            )}
+            <button className="pill skip" onClick={() => navigate('/', true)}>
+              スキップ ›
+            </button>
+          </div>
+        ) : (
         <div className="player-buttons">
           <button
             className={`pill ${showDate ? 'on' : ''}`}
@@ -345,9 +387,22 @@ export function Player({ query }: { query: string }) {
             ✕
           </button>
         </div>
+        )}
       </div>
 
-      {finished && (
+      {digest && !finished && (
+        <button className="digest-off" onClick={() => (setDailyDigest(false), navigate('/', true))}>
+          次から表示しない
+        </button>
+      )}
+
+      {finished && digest && (
+        <div className="ending">
+          <p className="ending-title small">今日のひとめぐり</p>
+          <p className="muted">また明日も、思い出がめぐってきます</p>
+        </div>
+      )}
+      {finished && !digest && (
         <div className="ending">
           <p className="ending-title">おしまい</p>
           <div className="row">

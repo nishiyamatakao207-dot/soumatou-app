@@ -88,9 +88,14 @@ export function Timeline({ query }: { query: string }) {
           <h1 className="logo">めぐる</h1>
           <p className="tagline">声と写真の思い出ムービー</p>
         </div>
-        <button className="btn primary" disabled={!entries?.length} onClick={() => navigate(`/play?${filterToQuery(filter)}`)}>
-          ▶ 再生
-        </button>
+        <div className="topbar-actions">
+          <button className="icon-btn" onClick={() => navigate('/settings')} aria-label="設定">
+            ⚙
+          </button>
+          <button className="btn primary" disabled={!entries?.length} onClick={() => navigate(`/play?${filterToQuery(filter)}`)}>
+            ▶ 再生
+          </button>
+        </div>
       </header>
 
       <FilterBar value={filter} onChange={setFilter} tags={tags} />

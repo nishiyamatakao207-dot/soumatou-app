@@ -9,7 +9,9 @@ export type Route =
   | { name: 'feel'; id: string }
   | { name: 'edit'; id: string }
   | { name: 'play'; query: string }
-  | { name: 'export'; query: string };
+  | { name: 'export'; query: string }
+  | { name: 'digest' }
+  | { name: 'settings' };
 
 export function parseRoute(hash: string): Route {
   const [path, query = ''] = hash.replace(/^#/, '').split('?');
@@ -19,6 +21,8 @@ export function parseRoute(hash: string): Route {
   if (seg[0] === 'edit' && seg[1]) return { name: 'edit', id: decodeURIComponent(seg[1]) };
   if (seg[0] === 'play') return { name: 'play', query };
   if (seg[0] === 'export') return { name: 'export', query };
+  if (seg[0] === 'digest') return { name: 'digest' };
+  if (seg[0] === 'settings') return { name: 'settings' };
   return { name: 'timeline', query };
 }
 
