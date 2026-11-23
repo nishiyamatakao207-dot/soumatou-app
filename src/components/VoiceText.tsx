@@ -39,6 +39,7 @@ export function VoiceText({
           {speech.listening ? '■ 終える' : '🎙 声で入力'}
         </button>
       )}
+      {speech.listening && <p className="muted small">聞いています…（話し終わると自動で止まります。続けるときは、もう一度押してください）</p>}
       {speech.error && <p className="error small">{speech.error}</p>}
     </div>
   );
