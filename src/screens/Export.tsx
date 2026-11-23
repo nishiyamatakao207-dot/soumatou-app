@@ -4,6 +4,8 @@ import { describeFilter, filterFromQuery, toMemoryFilter } from '../lib/filter';
 import { buildSlides, type Slide } from '../lib/movie';
 import { useSetting } from '../lib/settings';
 import type { ExportProgress, ExportResult } from '../lib/exporter';
+import { BgmPicker } from '../components/BgmPicker';
+import { createExportAudioContext } from '../lib/bgm';
 
 /* 思い出ムービーを動画ファイルにして、LINE などに共有する画面。
  * 書き出しの部品は大きいので、この画面を開いたときに初めて読み込む。 */
@@ -20,6 +22,7 @@ export function Export({ query }: { query: string }) {
   const [estimate, setEstimate] = useState<number>();
   const [method, setMethod] = useState<'fast' | 'realtime' | 'none'>();
   const [showDate, setShowDate] = useSetting('showDate');
+  const [bgm] = useSetting('bgm');
   const [phase, setPhase] = useState<Phase>({ kind: 'ready' });
   const [notice, setNotice] = useState<string>();
   const abort = useRef<AbortController | null>(null);
@@ -30,9 +33,21 @@ export function Export({ query }: { query: string }) {
       setSlides(list);
       const ex = await loadExporter();
       setEstimate(ex.estimateDurationSec(list));
-      setMethod(await ex.exportMethod());
     })();
   }, [filter]);
+
+  // 音を入れるかどうかで、書き出しの方法（速い／実時間）が変わることがある
+  const withSound = bgm !== 'none' || !!slides?.some((s) => s.media?.kind === 'video');
+  useEffect(() => {
+    if (!slides) return;
+    let alive = true;
+    loadExporter()
+      .then((ex) => ex.exportMethod(withSound))
+      .then((m) => alive && setMethod(m));
+    return () => {
+      alive = false;
+    };
+  }, [slides, withSound]);
 
   // 書き出し中は画面を消さない。画面を離れたら中止
   useEffect(() => {
@@ -49,6 +64,8 @@ export function Export({ query }: { query: string }) {
 
   async function start() {
     if (!slides?.length) return;
+    // 実時間で録画するときの音の出口は、iPhone ではこのタップの中で作る必要がある
+    const audioCtx = method === 'realtime' && withSound ? createExportAudioContext() : undefined;
     const ctrl = new AbortController();
     abort.current = ctrl;
     setPhase({ kind: 'working', progress: { ratio: 0 } });
@@ -57,6 +74,8 @@ export function Export({ query }: { query: string }) {
       const result = await ex.exportMovie({
         slides,
         showDate,
+        bgm,
+        audioCtx,
         signal: ctrl.signal,
         onProgress: (progress) => setPhase({ kind: 'working', progress }),
       });
@@ -64,6 +83,8 @@ export function Export({ query }: { query: string }) {
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') setPhase({ kind: 'ready' });
       else setPhase({ kind: 'error', message: e instanceof Error ? e.message : '書き出しに失敗しました' });
+    } finally {
+      void audioCtx?.close().catch(() => {});
     }
   }
 
@@ -121,6 +142,7 @@ export function Export({ query }: { query: string }) {
 
         {phase.kind === 'ready' && (
           <>
+            <BgmPicker />
             <label className="switch dark">
               <input type="checkbox" checked={showDate} onChange={(e) => setShowDate(e.target.checked)} />
               <span>写真の日付を入れる</span>
@@ -130,10 +152,15 @@ export function Export({ query }: { query: string }) {
             </button>
             <ul className="notes small muted">
               {method === 'fast' && <li>この端末では、動画の長さより短い時間で書き出せます。</li>}
-              {method === 'realtime' && <li>この端末では、動画の長さと同じくらいの時間がかかります。</li>}
+              {method === 'realtime' && (
+                <li>
+                  この端末では{withSound ? '、音を入れると' : ''}動画の長さと同じくらいの時間がかかります。
+                  {withSound && 'BGMを「なし」にすると速くなる場合があります。'}
+                </li>
+              )}
               {method === 'none' && <li className="error">この端末・ブラウザは動画の書き出しに対応していません。</li>}
               <li>書き出し中はアプリを開いたままにしてください（画面が消えたり別のアプリに切り替えると止まることがあります）。</li>
-              <li>動画の中の音は、今は入りません（BGMの追加は次の段階で対応予定）。</li>
+              <li>BGMと、動画に入っている音が一緒に入ります（動画の音の間はBGMが小さくなります）。</li>
             </ul>
           </>
         )}
@@ -158,6 +185,7 @@ export function Export({ query }: { query: string }) {
             <video className="export-preview" src={phase.url} controls playsInline />
             <p className="muted small">
               できあがり：長さ {mmss(phase.result.durationSec)}・大きさ {(phase.result.blob.size / 1024 / 1024).toFixed(1)}MB
+              {withSound && !phase.result.audioIncluded && '（この端末では音を入れられなかったため、音なしで書き出しました）'}
             </p>
             {canShare && (
               <button className="btn primary big" onClick={share}>

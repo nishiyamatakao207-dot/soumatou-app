@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { BgmChoice } from './music';
 
 /* アプリの設定（この端末だけに保存） */
 
 export interface Settings {
   /** 再生中に写真の日付を表示する */
   showDate: boolean;
+  /** BGM */
+  bgm: BgmChoice;
+  /** 自分の曲のファイル名（表示用） */
+  customBgmName: string;
 }
 
-const DEFAULTS: Settings = { showDate: true };
+const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '' };
 const KEY = 'meguru.settings';
 
 function read(): Settings {

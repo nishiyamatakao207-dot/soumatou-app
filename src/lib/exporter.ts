@@ -16,6 +16,8 @@ import {
   type Slide,
 } from './movie';
 import { DEFAULT_PALETTE, extractPalette, type Palette } from './palette';
+import { BGM_VOLUME, DUCK, bgmBuffer } from './bgm';
+import { SAMPLE_RATE, type BgmChoice } from './music';
 
 /* 思い出ムービーを動画ファイル（MP4）にする。
  *
@@ -50,11 +52,19 @@ export interface ExportResult {
   mime: string;
   ext: string;
   durationSec: number;
+  /** 音（BGM・動画の音）が入ったか */
+  audioIncluded: boolean;
 }
 
 export interface ExportOptions {
   slides: Slide[];
   showDate: boolean;
+  bgm: BgmChoice;
+  /**
+   * 実時間で録画するときに使う音の出口。iPhone ではボタンを押したその場で作る必要があるので、
+   * 画面側で createExportAudioContext() を呼んで渡す。
+   */
+  audioCtx?: AudioContext;
   onProgress: (p: ExportProgress) => void;
   signal: AbortSignal;
 }
@@ -372,6 +382,131 @@ function shadowText(ctx: CanvasRenderingContext2D, text: string, x: number, y: n
   ctx.shadowColor = 'transparent';
 }
 
+// ---------------------------------------------------------------- 音（BGM と動画の音）
+
+interface Clip {
+  buffer: AudioBuffer;
+  /** 鳴り始め・鳴り終わり（ミリ秒） */
+  from: number;
+  to: number;
+}
+
+interface Soundtrack {
+  bgm: AudioBuffer | null;
+  clips: Clip[];
+  total: number;
+}
+
+/** 動画ファイルから音だけを取り出す（音がない・読めないときは null） */
+async function decodeVideoAudio(blob: Blob): Promise<AudioBuffer | null> {
+  try {
+    const ctx = new OfflineAudioContext(2, 1, SAMPLE_RATE);
+    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+    // ほぼ無音なら入れない
+    const d = buf.getChannelData(0);
+    let peak = 0;
+    for (let i = 0; i < d.length; i += 64) peak = Math.max(peak, Math.abs(d[i]));
+    return peak > 0.002 ? buf : null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildSoundtrack(slides: Slide[], timing: Timing, bgm: BgmChoice): Promise<Soundtrack> {
+  const ctx = new OfflineAudioContext(2, 1, SAMPLE_RATE);
+  const bgmBuf = await bgmBuffer(bgm, ctx).catch(() => null);
+  const clips: Clip[] = [];
+  for (let i = 0; i < slides.length; i++) {
+    const m = slides[i].media;
+    if (m?.kind !== 'video' || m.missing) continue;
+    const blob = await loadFile(m.id);
+    const buf = blob && (await decodeVideoAudio(blob));
+    if (!buf) continue;
+    // 画面の再生と同じく、スライドが始まったら動画の頭から流す
+    const from = timing.start[i];
+    const to = Math.min(from + buf.duration * 1000, from + timing.dwell[i] - FADE_MS / 2);
+    clips.push({ buffer: buf, from, to });
+  }
+  return { bgm: bgmBuf, clips, total: timing.total };
+}
+
+/** 時刻 t（ミリ秒）の BGM の音量：最初はふわっと、最後はゆっくり消える。動画の音の間は小さく */
+function bgmGainAt(t: number, s: Soundtrack): number {
+  const fadeIn = clamp01(t / 2000);
+  const fadeOut = clamp01((s.total - t) / 3000);
+  let duck = 1;
+  for (const c of s.clips) {
+    // 前後 0.6 秒でなめらかに小さく／大きく
+    const k = Math.min(clamp01((t - (c.from - 600)) / 600), clamp01((c.to + 600 - t) / 600));
+    duck = Math.min(duck, 1 - k * (1 - DUCK));
+  }
+  return BGM_VOLUME * Math.min(fadeIn, fadeOut) * duck;
+}
+
+/** 音のある区間 [fromMs, toMs) を演奏した結果を返す（オフラインで、実時間より速く） */
+async function renderSound(s: Soundtrack, fromMs: number, toMs: number): Promise<AudioBuffer> {
+  const frames = Math.round(((toMs - fromMs) / 1000) * SAMPLE_RATE);
+  const ctx = new OfflineAudioContext(2, frames, SAMPLE_RATE);
+  if (s.bgm) {
+    const src = ctx.createBufferSource();
+    src.buffer = s.bgm;
+    src.loop = true;
+    const g = ctx.createGain();
+    for (let t = fromMs; t <= toMs; t += 100) g.gain.setValueAtTime(bgmGainAt(t, s), (t - fromMs) / 1000);
+    src.connect(g).connect(ctx.destination);
+    src.start(0, (fromMs / 1000) % s.bgm.duration);
+  }
+  for (const c of s.clips) {
+    if (c.to <= fromMs || c.from >= toMs) continue;
+    const src = ctx.createBufferSource();
+    src.buffer = c.buffer;
+    const g = ctx.createGain();
+    const startAt = Math.max(c.from, fromMs);
+    // 終わりの 0.4 秒で小さくする
+    g.gain.setValueAtTime(1, 0);
+    const fadeStart = (c.to - 400 - fromMs) / 1000;
+    if (fadeStart > 0) g.gain.setValueAtTime(1, fadeStart);
+    g.gain.linearRampToValueAtTime(0, (c.to - fromMs) / 1000);
+    src.connect(g).connect(ctx.destination);
+    src.start((startAt - fromMs) / 1000, (startAt - c.from) / 1000, (c.to - startAt) / 1000);
+  }
+  return ctx.startRendering();
+}
+
+/** 実時間の録画用：音を AudioContext に予約して流す */
+function scheduleRealtimeSound(ctx: AudioContext, dest: AudioNode, s: Soundtrack, at: number) {
+  const nodes: AudioScheduledSourceNode[] = [];
+  if (s.bgm) {
+    const src = ctx.createBufferSource();
+    src.buffer = s.bgm;
+    src.loop = true;
+    const g = ctx.createGain();
+    for (let t = 0; t <= s.total; t += 100) g.gain.setValueAtTime(bgmGainAt(t, s), at + t / 1000);
+    src.connect(g).connect(dest);
+    src.start(at);
+    nodes.push(src);
+  }
+  for (const c of s.clips) {
+    const src = ctx.createBufferSource();
+    src.buffer = c.buffer;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(1, at + (c.to - 400) / 1000);
+    g.gain.linearRampToValueAtTime(0, at + c.to / 1000);
+    src.connect(g).connect(dest);
+    src.start(at + c.from / 1000, 0, (c.to - c.from) / 1000);
+    nodes.push(src);
+  }
+  return () => nodes.forEach((n) => {
+    try {
+      n.stop();
+    } catch {
+      /* 止まっている */
+    }
+  });
+}
+
+const hasSound = (s: Soundtrack) => !!s.bgm || s.clips.length > 0;
+
 // ---------------------------------------------------------------- 1コマを描く
 
 class Renderer {
@@ -662,20 +797,55 @@ async function pickCodec(): Promise<string | null> {
   return null;
 }
 
-/** 書き出しの方法（画面に出す説明用） */
-export async function exportMethod(): Promise<'fast' | 'realtime' | 'none'> {
-  if (await pickCodec()) return 'fast';
-  if (typeof MediaRecorder !== 'undefined' && 'captureStream' in HTMLCanvasElement.prototype) return 'realtime';
+interface AudioCodec {
+  /** WebCodecs の名前 */
+  codec: string;
+  /** mp4-muxer の名前 */
+  mux: 'aac' | 'opus';
+}
+
+async function pickAudioCodec(): Promise<AudioCodec | null> {
+  if (typeof AudioEncoder === 'undefined' || typeof AudioData === 'undefined') return null;
+  const cands: AudioCodec[] = [{ codec: 'mp4a.40.2', mux: 'aac' }];
+  // 動作確認用（iPhone で再生しにくい形式なので、普段は使わない）
+  if ((globalThis as unknown as { __meguruTestOpus?: boolean }).__meguruTestOpus) cands.push({ codec: 'opus', mux: 'opus' });
+  for (const c of cands) {
+    try {
+      const r = await AudioEncoder.isConfigSupported({ codec: c.codec, sampleRate: SAMPLE_RATE, numberOfChannels: 2, bitrate: 128_000 });
+      if (r.supported) return c;
+    } catch {
+      /* 次の候補へ */
+    }
+  }
+  return null;
+}
+
+const canRecordRealtime = () => typeof MediaRecorder !== 'undefined' && 'captureStream' in HTMLCanvasElement.prototype;
+
+/**
+ * 書き出しの方法（画面に出す説明用）。
+ * withSound：BGM や動画の音を入れるか
+ */
+export async function exportMethod(withSound: boolean): Promise<'fast' | 'realtime' | 'none'> {
+  const v = await pickCodec();
+  if (v && (!withSound || (await pickAudioCodec()))) return 'fast';
+  if (canRecordRealtime()) return 'realtime';
+  if (v) return 'fast';
   return 'none';
 }
 
-export async function exportMovie({ slides, showDate, onProgress, signal }: ExportOptions): Promise<ExportResult> {
+export async function exportMovie({ slides, showDate, bgm, audioCtx, onProgress, signal }: ExportOptions): Promise<ExportResult> {
   const r = new Renderer(slides, showDate);
   try {
     await r.measureVideos();
-    const codec = await pickCodec();
-    if (codec) return await encodeFast(r, codec, onProgress, signal);
-    return await recordRealtime(r, onProgress, signal);
+    const sound = await buildSoundtrack(slides, r.timing, bgm);
+    const withSound = hasSound(sound);
+    const vcodec = await pickCodec();
+    const acodec = withSound ? await pickAudioCodec() : null;
+    if (vcodec && (!withSound || acodec)) return await encodeFast(r, vcodec, withSound ? { sound, codec: acodec! } : null, onProgress, signal);
+    if (canRecordRealtime()) return await recordRealtime(r, withSound && audioCtx ? { sound, ctx: audioCtx } : null, onProgress, signal);
+    if (vcodec) return await encodeFast(r, vcodec, null, onProgress, signal); // 音なしで書き出す
+    throw new Error('この端末・ブラウザは動画の書き出しに対応していません');
   } finally {
     r.dispose();
   }
@@ -684,13 +854,58 @@ export async function exportMovie({ slides, showDate, onProgress, signal }: Expo
 const abortError = () => new DOMException('中止しました', 'AbortError');
 
 /** WebCodecs：1コマずつ描いて変換（実時間より速い） */
-async function encodeFast(r: Renderer, codec: string, onProgress: ExportOptions['onProgress'], signal: AbortSignal): Promise<ExportResult> {
+async function encodeFast(
+  r: Renderer,
+  codec: string,
+  audio: { sound: Soundtrack; codec: AudioCodec } | null,
+  onProgress: ExportOptions['onProgress'],
+  signal: AbortSignal,
+): Promise<ExportResult> {
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
     video: { codec: 'avc', width: W, height: H, frameRate: FPS },
+    ...(audio ? { audio: { codec: audio.codec.mux, numberOfChannels: 2, sampleRate: SAMPLE_RATE } } : {}),
     fastStart: 'in-memory',
   });
   let failure: unknown;
+
+  // 音：20秒ずつ演奏して変換する（メモリを使いすぎないように）
+  const AUDIO_SHARE = audio ? 0.08 : 0; // 進み具合のうち、音の分
+  if (audio) {
+    const aenc = new AudioEncoder({
+      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+      error: (e) => (failure = e),
+    });
+    aenc.configure({ codec: audio.codec.codec, sampleRate: SAMPLE_RATE, numberOfChannels: 2, bitrate: 128_000 });
+    const total = r.timing.total;
+    const CHUNK = 20_000;
+    for (let from = 0; from < total; from += CHUNK) {
+      if (signal.aborted) {
+        aenc.close();
+        throw abortError();
+      }
+      const to = Math.min(total, from + CHUNK);
+      const buf = await renderSound(audio.sound, from, to);
+      const planar = new Float32Array(buf.length * 2);
+      planar.set(buf.getChannelData(0), 0);
+      planar.set(buf.getChannelData(1), buf.length);
+      const data = new AudioData({
+        format: 'f32-planar',
+        sampleRate: SAMPLE_RATE,
+        numberOfFrames: buf.length,
+        numberOfChannels: 2,
+        timestamp: Math.round(from * 1000),
+        data: planar,
+      });
+      aenc.encode(data);
+      data.close();
+      onProgress({ ratio: AUDIO_SHARE * (to / total) });
+    }
+    await aenc.flush();
+    aenc.close();
+    if (failure) throw failure;
+  }
+
   const encoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
     error: (e) => (failure = e),
@@ -714,9 +929,9 @@ async function encodeFast(r: Renderer, codec: string, onProgress: ExportOptions[
     // 変換が追いつくまで少し待つ（メモリを使いすぎないように）
     while (encoder.encodeQueueSize > 6) await new Promise((ok) => setTimeout(ok, 4));
     if (n % 5 === 0 || n === frames - 1) {
-      const ratio = (n + 1) / frames;
+      const vr = (n + 1) / frames;
       const elapsed = (performance.now() - began) / 1000;
-      onProgress({ ratio, remainingSec: n > FPS ? (elapsed / ratio) * (1 - ratio) : undefined });
+      onProgress({ ratio: AUDIO_SHARE + (1 - AUDIO_SHARE) * vr, remainingSec: n > FPS ? (elapsed / vr) * (1 - vr) : undefined });
       await new Promise((ok) => setTimeout(ok, 0)); // 画面の更新をはさむ
     }
   }
@@ -724,23 +939,46 @@ async function encodeFast(r: Renderer, codec: string, onProgress: ExportOptions[
   encoder.close();
   if (failure) throw failure;
   muxer.finalize();
-  return { blob: new Blob([muxer.target.buffer], { type: 'video/mp4' }), mime: 'video/mp4', ext: 'mp4', durationSec: r.timing.total / 1000 };
+  return {
+    blob: new Blob([muxer.target.buffer], { type: 'video/mp4' }),
+    mime: 'video/mp4',
+    ext: 'mp4',
+    durationSec: r.timing.total / 1000,
+    audioIncluded: !!audio,
+  };
 }
 
 /** MediaRecorder：描いたキャンバスを実時間で録画（変換機能がない端末用） */
-async function recordRealtime(r: Renderer, onProgress: ExportOptions['onProgress'], signal: AbortSignal): Promise<ExportResult> {
-  const mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m));
+async function recordRealtime(
+  r: Renderer,
+  audio: { sound: Soundtrack; ctx: AudioContext } | null,
+  onProgress: ExportOptions['onProgress'],
+  signal: AbortSignal,
+): Promise<ExportResult> {
+  const types = audio
+    ? ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
+    : ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
+  const mime = types.find((m) => MediaRecorder.isTypeSupported(m));
   if (!mime) throw new Error('この端末では動画を書き出せません');
   // 最初のコマを用意してから録画を始める
   await r.prepareFor(0);
   await r.draw(0);
-  const stream = (r.canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(FPS);
+  const video = (r.canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(FPS);
+  let stopSound = () => {};
+  let dest: MediaStreamAudioDestinationNode | undefined;
+  if (audio) {
+    await audio.ctx.resume().catch(() => {});
+    dest = audio.ctx.createMediaStreamDestination();
+  }
+  const stream = new MediaStream([...video.getVideoTracks(), ...(dest ? dest.stream.getAudioTracks() : [])]);
   const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: BITRATE });
   const chunks: Blob[] = [];
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   const stopped = new Promise<void>((ok) => (rec.onstop = () => ok()));
   rec.start(1000);
-  const t0 = performance.now();
+  // 音は AudioContext の時計で予約し、映像は同じ瞬間を 0 として描く
+  if (audio && dest) stopSound = scheduleRealtimeSound(audio.ctx, dest, audio.sound, audio.ctx.currentTime + 0.05);
+  const t0 = performance.now() + 50;
   const total = r.timing.total;
   try {
     for (;;) {
@@ -756,9 +994,17 @@ async function recordRealtime(r: Renderer, onProgress: ExportOptions['onProgress
     }
   } finally {
     if (rec.state !== 'inactive') rec.stop();
+    stopSound();
     stream.getTracks().forEach((tr) => tr.stop());
+    video.getTracks().forEach((tr) => tr.stop());
   }
   await stopped;
   const type = mime.split(';')[0];
-  return { blob: new Blob(chunks, { type }), mime: type, ext: type === 'video/mp4' ? 'mp4' : 'webm', durationSec: total / 1000 };
+  return {
+    blob: new Blob(chunks, { type }),
+    mime: type,
+    ext: type === 'video/mp4' ? 'mp4' : 'webm',
+    durationSec: total / 1000,
+    audioIncluded: !!audio,
+  };
 }

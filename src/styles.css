@@ -136,7 +136,7 @@ input, textarea, select { font: inherit; color: var(--text); }
 /* ---------- 走馬灯 ---------- */
 .player { position: fixed; inset: 0; background: #000; color: #fff; overflow: hidden; user-select: none; -webkit-user-select: none; }
 .player.center { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; background: radial-gradient(circle at 50% 40%, #2a2017, #000 70%); }
-.intro-mark { width: 120px; height: 120px; border-radius: 50%; border: 6px dashed var(--accent); animation: spin 24s linear infinite; margin-bottom: 8px; }
+.intro-mark { flex: none; width: 120px; height: 120px; border-radius: 50%; border: 6px dashed var(--accent); animation: spin 24s linear infinite; margin-bottom: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .intro-brand { margin: 0; font-size: 26px; letter-spacing: .3em; color: #f3ece4; }
 .intro-sub { margin: 0; font-size: 20px; color: var(--accent); }
@@ -240,3 +240,14 @@ input, textarea, select { font: inherit; color: var(--text); }
 .export-done { gap: 12px; }
 .export-preview { width: min(100%, 280px); aspect-ratio: 9 / 16; justify-self: center; background: #000; border-radius: 12px; }
 a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }
+
+/* ---- BGM ---- */
+.bgm-picker { display: grid; gap: 8px; width: 100%; max-width: 420px; text-align: left; }
+.bgm-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.bgm-label { font-size: 13px; font-weight: 600; letter-spacing: .08em; color: var(--muted); }
+.bgm-note { margin: 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.bgm-note.small { font-size: 12px; }
+.bgm-picker.on-dark .chip { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.16); color: #f3ece4; }
+.bgm-picker.on-dark .chip.on { background: color-mix(in srgb, var(--accent) 22%, transparent); border-color: var(--accent); color: var(--accent); }
+.bgm-picker.on-dark .bgm-note, .bgm-picker.on-dark .bgm-label { color: #cfc4b8; }
+.player.center.intro { overflow-y: auto; justify-content: safe center; padding-top: calc(24px + var(--safe-top)); padding-bottom: calc(24px + var(--safe-bottom)); }

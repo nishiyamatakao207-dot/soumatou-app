@@ -7,6 +7,8 @@ import { navigate } from '../router';
 import { useStoredUrl } from '../lib/useStoredUrl';
 import { DEFAULT_PALETTE, extractPalette, type Palette } from '../lib/palette';
 import { CircleImage, CircleVideo } from '../components/Circle';
+import { BgmPicker } from '../components/BgmPicker';
+import { BgmPlayer } from '../lib/bgm';
 import { BG_FADE_MS, FADE_MS, MOTES, VIDEO_MAX_MS, PHOTO_MS, buildSlides, driftMs, photoDwell, place, type Slide } from '../lib/movie';
 
 /* 走馬灯：丸く切り抜いた写真が、画面のあちこちにふわっと現れては消えていく。
@@ -50,6 +52,8 @@ export function Player({ query }: { query: string }) {
   const [palettes, setPalettes] = useState<Record<string, Palette>>({});
   const { vw, vh } = useViewport();
   const [showDate, setShowDate] = useSetting('showDate');
+  const [bgmChoice] = useSetting('bgm');
+  const bgm = useRef<BgmPlayer | null>(null);
   const progressRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -173,7 +177,26 @@ export function Player({ query }: { query: string }) {
     return () => window.removeEventListener('keydown', on);
   }, [next, back]);
 
+  // ---- BGM：一時停止・消音・終わりに合わせる ----
+  useEffect(() => () => bgm.current?.dispose(), []);
+  useEffect(() => {
+    if (!bgm.current || finished) return;
+    if (paused) bgm.current.pause();
+    else bgm.current.resume();
+  }, [paused, finished]);
+  useEffect(() => bgm.current?.setMuted(muted), [muted]);
+  useEffect(() => {
+    if (finished) bgm.current?.fadeOut(2.5);
+  }, [finished]);
+  // 音のある動画が流れている間は BGM を小さく
+  const curIsVideo = slides?.[cur]?.media?.kind === 'video';
+  useEffect(() => bgm.current?.duck(curIsVideo && !muted), [curIsVideo, muted]);
+
   const restart = () => {
+    if (bgm.current) {
+      bgm.current.resume();
+      void bgm.current.play(bgmChoice);
+    }
     setPrev(null);
     setCur(0);
     setBgs([0]);
@@ -218,11 +241,19 @@ export function Player({ query }: { query: string }) {
           className="btn primary big"
           onClick={() => {
             clock.current = { t: 0, dwell: dwellFor(0), leaving: false };
+            if (bgmChoice !== 'none') {
+              // iPhone では、このタップの中で音を起こしておく必要がある
+              const p = new BgmPlayer();
+              p.unlock();
+              bgm.current = p;
+              void p.play(bgmChoice);
+            }
             setStarted(true);
           }}
         >
           ▶ はじめる
         </button>
+        <BgmPicker dark />
         <button className="btn" onClick={() => navigate(`/export?${query}`)}>
           🎬 動画にして共有
         </button>
