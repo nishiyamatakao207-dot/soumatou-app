@@ -227,3 +227,16 @@ input, textarea, select { font: inherit; color: var(--text); }
 .media-date input { width: 100%; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; font-size: 14px; }
 .date-source { font-size: 11px; color: var(--muted); }
 .date-source.weak { color: var(--danger); }
+
+/* ---- 動画にする ---- */
+.export-summary { gap: 4px; }
+.export-what { margin: 0; font-size: 18px; color: var(--accent); }
+.switch.dark { color: var(--text); }
+.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+.export-progress { gap: 12px; text-align: center; }
+.export-progress p { margin: 0; }
+.bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); transform-origin: left; transition: transform .3s linear; }
+.export-done { gap: 12px; }
+.export-preview { width: min(100%, 280px); aspect-ratio: 9 / 16; justify-self: center; background: #000; border-radius: 12px; }
+a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }

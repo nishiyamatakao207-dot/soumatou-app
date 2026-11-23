@@ -4,6 +4,8 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
   base: './',
+  // 試用ページ（1ファイル版）では、あとから読み込む部品も1つにまとめる
+  build: process.env.ARTIFACT ? { rollupOptions: { output: { inlineDynamicImports: true } } } : {},
   plugins: [
     react(),
     // ARTIFACT=1 のときは試用ページ用（オフライン機能なしの1ファイル版）

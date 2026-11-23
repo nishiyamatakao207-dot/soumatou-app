@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listDatedItems, thumbKey } from '../data/repository';
-import type { MediaItem, Memory } from '../data/types';
 import { describeFilter, filterFromQuery, toMemoryFilter } from '../lib/filter';
 import { formatDate, formatDot } from '../lib/format';
 import { useSetting } from '../lib/settings';
+import { navigate } from '../router';
 import { useStoredUrl } from '../lib/useStoredUrl';
 import { DEFAULT_PALETTE, extractPalette, type Palette } from '../lib/palette';
 import { CircleImage, CircleVideo } from '../components/Circle';
+import { BG_FADE_MS, FADE_MS, MOTES, VIDEO_MAX_MS, PHOTO_MS, buildSlides, driftMs, photoDwell, place, type Slide } from '../lib/movie';
 
 /* 走馬灯：丸く切り抜いた写真が、画面のあちこちにふわっと現れては消えていく。
  * 前の写真が消えるのと次の写真が現れるのを重ねて、途切れずに流れる。
@@ -15,90 +16,14 @@ import { CircleImage, CircleVideo } from '../components/Circle';
  * なめらかに動かすため、動き（フェード・漂い・光の粒）はすべてCSSのアニメーションで行い、
  * JavaScript は「いつ次へ進むか」だけを数える。 */
 
-const FADE_MS = 1800; // フェードの長さ（前後の写真が重なる時間）
-const PHOTO_MS = 7000; // 写真1枚の表示時間（次の写真が出始めるまでの間隔）
-const VIDEO_MAX_MS = 20000; // 動画はここまでで次へ
-const BG_FADE_MS = 2600; // 背景の色が移り変わる時間
-const COMMENT_SPACE = 150; // 写真の下にコメント用にあける高さ
-const TOP_SPACE = 118; // 上のボタンと日付の分
-const DRIFT = 16; // 漂う距離（px）
-
-interface Slide {
-  key: string;
-  memory: Memory;
-  media?: MediaItem;
-  comment: string;
-  /** この1枚の日付 */
-  date: number;
-}
-
-/** 写真の表示時間。フェードで重なる分を足して、写真と写真の間隔がちょうど PHOTO_MS になるようにする */
-const photoDwell = () => PHOTO_MS + FADE_MS;
-
-/** スライドごとに毎回同じになる乱数（戻っても同じ位置に出る） */
-function seeded(key: string) {
-  let h = 2166136261;
-  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
-  return () => {
-    h = Math.imul(h ^ (h >>> 15), 2246822507);
-    h = Math.imul(h ^ (h >>> 13), 3266489909);
-    h ^= h >>> 16;
-    return (h >>> 0) / 4294967296;
-  };
-}
-
-interface Placement {
-  d: number; // 直径
-  x: number; // 円の左上
-  y: number;
-  dx: number; // 漂う向き
-  dy: number;
-  commentLeft: number; // 円の左端から見たコメントの位置
-  commentWidth: number;
-}
-
-/** 写真が画面からはみ出さず、下のコメントとも重ならない範囲で位置を決める */
-function place(key: string, vw: number, vh: number): Placement {
-  const rnd = seeded(key);
-  const margin = 8 + DRIFT; // 漂っても画面の端に当たらない余白
-  // 円のいちばん外側（約8%）はほぼ透明なので、そこだけは画面の外に出てもよい
-  const RIM = 0.08;
-  const top = TOP_SPACE;
-  const bottom = vh - 16;
-  const fitW = (vw - margin * 2) / (1 - RIM * 2);
-  const fitH = (bottom - top - COMMENT_SPACE) / (1 - RIM);
-  const maxD = Math.max(160, Math.min(fitW, fitH));
-  const d = Math.round(maxD * (0.88 + rnd() * 0.12));
-  const rim = d * RIM;
-  const xMin = margin - rim;
-  const xMax = Math.max(xMin, vw - margin - d + rim);
-  const yMin = top - rim;
-  const yMax = Math.max(yMin, bottom - COMMENT_SPACE - d + rim);
-  const x = xMin + (xMax - xMin) * rnd();
-  const y = yMin + (yMax - yMin) * rnd();
-  const ang = rnd() * Math.PI * 2;
-  const commentWidth = Math.min(vw - 32, 520);
-  const cx = x + d / 2;
-  const left = Math.min(Math.max(cx - commentWidth / 2, 16), vw - 16 - commentWidth);
-  return { d, x, y, dx: Math.cos(ang) * DRIFT, dy: Math.sin(ang) * DRIFT, commentLeft: left - x, commentWidth };
-}
-
-/** 光の粒（40個）の大きさ・位置・動く速さ。毎回同じ配置になるよう固定の乱数で決める */
-const MOTE_COUNT = 40;
-const MOTES: React.CSSProperties[] = (() => {
-  const rnd = seeded('motes');
-  return Array.from({ length: MOTE_COUNT }, () => {
-    const size = 6 + Math.round(rnd() * rnd() * 34); // 小さい粒を多めに
-    return {
-      width: size,
-      height: size,
-      left: `${(rnd() * 104 - 2).toFixed(1)}%`,
-      top: `${(rnd() * 104 - 2).toFixed(1)}%`,
-      animationDuration: `${(11 + rnd() * 12).toFixed(1)}s`,
-      animationDelay: `${(-rnd() * 20).toFixed(1)}s`,
-    };
-  });
-})();
+const moteStyle = (m: (typeof MOTES)[number]): React.CSSProperties => ({
+  width: m.size,
+  height: m.size,
+  left: `${m.left.toFixed(1)}%`,
+  top: `${m.top.toFixed(1)}%`,
+  animationDuration: `${m.dur.toFixed(1)}s`,
+  animationDelay: `${(-m.delay).toFixed(1)}s`,
+});
 
 function useViewport() {
   const get = () => ({ vw: window.innerWidth, vh: window.innerHeight });
@@ -130,16 +55,8 @@ export function Player({ query }: { query: string }) {
   useEffect(() => {
     (async () => {
       // 写真・動画1枚ごとの日付で、古い順に並べる
-      const items = await listDatedItems(toMemoryFilter(filter));
-      const firstOfMemory = new Set<string>();
-      const list: Slide[] = items.map((it) => {
-        const first = !firstOfMemory.has(it.memory.id);
-        firstOfMemory.add(it.memory.id);
-        return it.media
-          ? { key: it.media.id, memory: it.memory, media: it.media, date: it.date, comment: it.media.caption || (first ? it.memory.text : '') }
-          : { key: it.memory.id, memory: it.memory, date: it.date, comment: it.memory.text };
-      });
-      setMemCount(firstOfMemory.size);
+      const list = buildSlides(await listDatedItems(toMemoryFilter(filter)));
+      setMemCount(new Set(list.map((x) => x.memory.id)).size);
       setSlides(list);
     })();
   }, [filter]);
@@ -306,6 +223,9 @@ export function Player({ query }: { query: string }) {
         >
           ▶ はじめる
         </button>
+        <button className="btn" onClick={() => navigate(`/export?${query}`)}>
+          🎬 動画にして共有
+        </button>
         <label className="switch">
           <input type="checkbox" checked={showDate} onChange={(e) => setShowDate(e.target.checked)} />
           <span>再生中に写真の日付を表示する</span>
@@ -329,12 +249,12 @@ export function Player({ query }: { query: string }) {
       <div className="motes" aria-hidden="true">
         <div className="motes-a" style={{ color: curPalette.glow1 }}>
           {MOTES.filter((_, k) => k % 2 === 0).map((m, k) => (
-            <span key={k} style={m} />
+            <span key={k} style={moteStyle(m)} />
           ))}
         </div>
         <div className="motes-b" style={{ color: curPalette.glow2 }}>
           {MOTES.filter((_, k) => k % 2 === 1).map((m, k) => (
-            <span key={k} style={m} />
+            <span key={k} style={moteStyle(m)} />
           ))}
         </div>
       </div>
@@ -436,7 +356,6 @@ function SlideView({
   const media = slide.media;
   const { url, missing } = useStoredUrl(media && !media.missing ? media.id : undefined);
   const lost = !!media && (media.missing || missing);
-  const duration = media?.kind === 'video' ? VIDEO_MAX_MS : photoDwell();
 
   return (
     <div className={`slide ${leaving ? 'out' : 'in'}`}>
@@ -448,7 +367,7 @@ function SlideView({
           width: p.d,
           ['--dx' as string]: `${p.dx.toFixed(1)}px`,
           ['--dy' as string]: `${p.dy.toFixed(1)}px`,
-          ['--dur' as string]: `${duration + FADE_MS * 2}ms`,
+          ['--dur' as string]: `${driftMs(slide)}ms`,
         }}
       >
         <div className="circle-wrap" style={{ height: p.d }}>

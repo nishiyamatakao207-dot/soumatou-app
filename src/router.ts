@@ -7,7 +7,8 @@ export type Route =
   | { name: 'timeline'; query: string }
   | { name: 'new' }
   | { name: 'edit'; id: string }
-  | { name: 'play'; query: string };
+  | { name: 'play'; query: string }
+  | { name: 'export'; query: string };
 
 export function parseRoute(hash: string): Route {
   const [path, query = ''] = hash.replace(/^#/, '').split('?');
@@ -15,6 +16,7 @@ export function parseRoute(hash: string): Route {
   if (seg[0] === 'new') return { name: 'new' };
   if (seg[0] === 'edit' && seg[1]) return { name: 'edit', id: decodeURIComponent(seg[1]) };
   if (seg[0] === 'play') return { name: 'play', query };
+  if (seg[0] === 'export') return { name: 'export', query };
   return { name: 'timeline', query };
 }
 
