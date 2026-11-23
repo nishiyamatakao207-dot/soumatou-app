@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getMediaFor, listMemories, thumbKey } from '../data/repository';
+import { listDatedItems, thumbKey } from '../data/repository';
 import type { MediaItem, Memory } from '../data/types';
 import { describeFilter, filterFromQuery, toMemoryFilter } from '../lib/filter';
-import { formatDate } from '../lib/format';
+import { formatDate, formatDot } from '../lib/format';
+import { useSetting } from '../lib/settings';
 import { useStoredUrl } from '../lib/useStoredUrl';
 import { DEFAULT_PALETTE, extractPalette, type Palette } from '../lib/palette';
 import { CircleImage, CircleVideo } from '../components/Circle';
@@ -27,6 +28,8 @@ interface Slide {
   memory: Memory;
   media?: MediaItem;
   comment: string;
+  /** この1枚の日付 */
+  date: number;
 }
 
 /** 写真の表示時間。フェードで重なる分を足して、写真と写真の間隔がちょうど PHOTO_MS になるようにする */
@@ -121,18 +124,22 @@ export function Player({ query }: { query: string }) {
   const [bgs, setBgs] = useState<number[]>([0]);
   const [palettes, setPalettes] = useState<Record<string, Palette>>({});
   const { vw, vh } = useViewport();
+  const [showDate, setShowDate] = useSetting('showDate');
   const progressRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     (async () => {
-      const memories = await listMemories(toMemoryFilter(filter)); // 古い順
-      const list: Slide[] = [];
-      for (const m of memories) {
-        const media = await getMediaFor(m);
-        if (!media.length) list.push({ key: m.id, memory: m, comment: m.text });
-        media.forEach((x, i) => list.push({ key: x.id, memory: m, media: x, comment: x.caption || (i === 0 ? m.text : '') }));
-      }
-      setMemCount(memories.length);
+      // 写真・動画1枚ごとの日付で、古い順に並べる
+      const items = await listDatedItems(toMemoryFilter(filter));
+      const firstOfMemory = new Set<string>();
+      const list: Slide[] = items.map((it) => {
+        const first = !firstOfMemory.has(it.memory.id);
+        firstOfMemory.add(it.memory.id);
+        return it.media
+          ? { key: it.media.id, memory: it.memory, media: it.media, date: it.date, comment: it.media.caption || (first ? it.memory.text : '') }
+          : { key: it.memory.id, memory: it.memory, date: it.date, comment: it.memory.text };
+      });
+      setMemCount(firstOfMemory.size);
       setSlides(list);
     })();
   }, [filter]);
@@ -285,8 +292,8 @@ export function Player({ query }: { query: string }) {
         <p className="intro-brand">めぐる</p>
         <p className="intro-sub">{describeFilter(filter)}</p>
         <p className="intro-count">
-          {formatDate(slides[0].memory.date)}
-          {memCount > 1 && <> 〜 {formatDate(slides.at(-1)!.memory.date)}</>}
+          {formatDate(slides[0].date)}
+          {slides.at(-1)!.date - slides[0].date > 864e5 / 2 && <> 〜 {formatDate(slides.at(-1)!.date)}</>}
           <br />
           {memCount}つの思い出
         </p>
@@ -299,6 +306,10 @@ export function Player({ query }: { query: string }) {
         >
           ▶ はじめる
         </button>
+        <label className="switch">
+          <input type="checkbox" checked={showDate} onChange={(e) => setShowDate(e.target.checked)} />
+          <span>再生中に写真の日付を表示する</span>
+        </label>
         <button className="btn ghost" onClick={() => history.back()}>
           戻る
         </button>
@@ -329,13 +340,14 @@ export function Player({ query }: { query: string }) {
       </div>
 
       <div className="stage" onClick={finished ? undefined : onTap}>
-        <div key={current.memory.id} className="memory-date">
-          {formatDate(current.memory.date)}
-          {current.memory.tags.length > 0 && <span>{current.memory.tags.map((t) => `#${t}`).join('  ')}</span>}
-        </div>
+        {current.memory.tags.length > 0 && (
+          <div key={current.memory.id} className="memory-date">
+            <span>{current.memory.tags.map((t) => `#${t}`).join('  ')}</span>
+          </div>
+        )}
 
         {prev !== null && slides[prev] && (
-          <SlideView key={slides[prev].key} slide={slides[prev]} index={prev} vw={vw} vh={vh} leaving playing={false} muted />
+          <SlideView key={slides[prev].key} slide={slides[prev]} index={prev} vw={vw} vh={vh} leaving playing={false} muted showDate={showDate} />
         )}
         <SlideView
           key={current.key}
@@ -346,6 +358,7 @@ export function Player({ query }: { query: string }) {
           leaving={finished}
           playing={!paused && !finished}
           muted={muted}
+          showDate={showDate}
           onImage={onPalette}
           onVideoDuration={onVideoDuration}
           onVideoEnded={onVideoEnded}
@@ -359,6 +372,14 @@ export function Player({ query }: { query: string }) {
           <div ref={progressRef} className="progress-bar" />
         </div>
         <div className="player-buttons">
+          <button
+            className={`pill ${showDate ? 'on' : ''}`}
+            onClick={() => setShowDate(!showDate)}
+            aria-pressed={showDate}
+            aria-label="日付の表示"
+          >
+            日付
+          </button>
           <button onClick={() => setMuted((m) => !m)} aria-label={muted ? '音を出す' : '消音'}>
             {muted ? '🔇' : '🔊'}
           </button>
@@ -394,6 +415,7 @@ function SlideView({
   leaving,
   playing,
   muted,
+  showDate,
   onImage,
   onVideoDuration,
   onVideoEnded,
@@ -405,6 +427,7 @@ function SlideView({
   leaving: boolean;
   playing: boolean;
   muted: boolean;
+  showDate: boolean;
   onImage?: (key: string, img: HTMLImageElement) => void;
   onVideoDuration?: (i: number, sec: number) => void;
   onVideoEnded?: (i: number) => void;
@@ -448,10 +471,11 @@ function SlideView({
             />
           )}
         </div>
-        {slide.comment && media && (
-          <p className="slide-comment" style={{ left: p.commentLeft, width: p.commentWidth, top: p.d * 0.92 - 6 }}>
-            {slide.comment}
-          </p>
+        {((slide.comment && media) || showDate) && (
+          <div className="slide-caption" style={{ left: p.commentLeft, width: p.commentWidth, top: p.d * 0.92 - 6 }}>
+            {showDate && <p className="slide-date">{formatDot(slide.date)}</p>}
+            {slide.comment && media && <p className="slide-comment">{slide.comment}</p>}
+          </div>
         )}
       </div>
     </div>

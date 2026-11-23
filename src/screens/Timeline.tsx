@@ -1,19 +1,46 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getMedia, listMemories, listTags } from '../data/repository';
-import type { Memory } from '../data/types';
+import { listDatedItems, listTags, type DatedItem } from '../data/repository';
+import type { MediaItem, Memory } from '../data/types';
 import { FilterBar } from '../components/FilterBar';
 import { Thumb } from '../components/Thumb';
 import { describeFilter, filterFromQuery, filterToQuery, toMemoryFilter, type FilterState } from '../lib/filter';
-import { formatDate, formatMonth } from '../lib/format';
+import { dayKey, formatDate, formatMonth } from '../lib/format';
 import { navigate } from '../router';
+
+/** 一覧の1枚のカード：1つの記録のうち、同じ日の写真・動画のまとまり */
+interface Entry {
+  key: string;
+  memory: Memory;
+  media: MediaItem[];
+  date: number;
+  /** 同じ記録に、別の日のカードもある */
+  split: boolean;
+}
+
+/** 写真1枚ごとの日付で、記録を「日ごと」のカードに分けて新しい順に並べる */
+function toEntries(items: DatedItem[]): Entry[] {
+  const map = new Map<string, Entry>();
+  for (const it of items) {
+    const key = `${it.memory.id}|${dayKey(it.date)}`;
+    let e = map.get(key);
+    if (!e) map.set(key, (e = { key, memory: it.memory, media: [], date: it.date, split: false }));
+    if (it.media) e.media.push(it.media);
+    e.date = Math.min(e.date, it.date);
+  }
+  const entries = [...map.values()];
+  const perMemory = new Map<string, number>();
+  entries.forEach((e) => perMemory.set(e.memory.id, (perMemory.get(e.memory.id) ?? 0) + 1));
+  entries.forEach((e) => (e.split = (perMemory.get(e.memory.id) ?? 0) > 1));
+  return entries.sort((a, b) => b.date - a.date);
+}
 
 export function Timeline({ query }: { query: string }) {
   const filter = useMemo(() => filterFromQuery(query), [query]);
-  const [memories, setMemories] = useState<Memory[]>();
+  const [entries, setEntries] = useState<Entry[]>();
   const [tags, setTags] = useState<string[]>([]);
 
   useEffect(() => {
-    listMemories(toMemoryFilter(filter)).then((m) => setMemories(m.reverse())); // 一覧は新しい順
+    listDatedItems(toMemoryFilter(filter)).then((items) => setEntries(toEntries(items)));
   }, [filter]);
   useEffect(() => {
     listTags().then(setTags);
@@ -22,14 +49,14 @@ export function Timeline({ query }: { query: string }) {
   const setFilter = (f: FilterState) => navigate(`/?${filterToQuery(f)}`, true);
 
   const groups = useMemo(() => {
-    const g: { month: string; items: Memory[] }[] = [];
-    for (const m of memories ?? []) {
-      const month = formatMonth(m.date);
+    const g: { month: string; items: Entry[] }[] = [];
+    for (const e of entries ?? []) {
+      const month = formatMonth(e.date);
       if (g.at(-1)?.month !== month) g.push({ month, items: [] });
-      g.at(-1)!.items.push(m);
+      g.at(-1)!.items.push(e);
     }
     return g;
-  }, [memories]);
+  }, [entries]);
 
   const hasFilter = filter.tags.length > 0 || filter.period !== 'all';
 
@@ -40,7 +67,7 @@ export function Timeline({ query }: { query: string }) {
           <h1 className="logo">めぐる</h1>
           <p className="tagline">声と写真の思い出ムービー</p>
         </div>
-        <button className="btn primary" disabled={!memories?.length} onClick={() => navigate(`/play?${filterToQuery(filter)}`)}>
+        <button className="btn primary" disabled={!entries?.length} onClick={() => navigate(`/play?${filterToQuery(filter)}`)}>
           ▶ 再生
         </button>
       </header>
@@ -48,7 +75,7 @@ export function Timeline({ query }: { query: string }) {
       <FilterBar value={filter} onChange={setFilter} tags={tags} />
       {hasFilter && (
         <p className="filter-note">
-          {describeFilter(filter)}（{memories?.length ?? 0}件）
+          {describeFilter(filter)}（{entries?.length ?? 0}件）
           <button className="link" onClick={() => setFilter({ tags: [], period: 'all' })}>
             解除
           </button>
@@ -56,7 +83,7 @@ export function Timeline({ query }: { query: string }) {
       )}
 
       <main className="timeline">
-        {memories && memories.length === 0 && (
+        {entries && entries.length === 0 && (
           <div className="empty">
             {hasFilter ? (
               <p>この条件の思い出はまだありません。</p>
@@ -71,19 +98,23 @@ export function Timeline({ query }: { query: string }) {
         {groups.map((g) => (
           <section key={g.month}>
             <h2 className="month">{g.month}</h2>
-            {g.items.map((m) => (
-              <button key={m.id} className="card" onClick={() => navigate(`/edit/${encodeURIComponent(m.id)}`)}>
-                <div className="card-media">
-                  {m.mediaIds[0] ? <Thumb id={m.mediaIds[0]} /> : <div className="thumb text-only">✎</div>}
-                  {m.mediaIds.length > 1 && <span className="count">{m.mediaIds.length}</span>}
-                </div>
-                <div className="card-body">
-                  <div className="card-date">{formatDate(m.date)}</div>
-                  <CardText memory={m} />
-                  {m.tags.length > 0 && <div className="card-tags">{m.tags.map((t) => `#${t}`).join(' ')}</div>}
-                </div>
-              </button>
-            ))}
+            {g.items.map((e) => {
+              const text = e.media.find((m) => m.caption)?.caption || e.memory.text;
+              return (
+                <button key={e.key} className="card" onClick={() => navigate(`/edit/${encodeURIComponent(e.memory.id)}`)}>
+                  <div className="card-media">
+                    {e.media[0] ? <Thumb item={e.media[0]} /> : <div className="thumb text-only">✎</div>}
+                    {e.media.length > 1 && <span className="count">{e.media.length}</span>}
+                  </div>
+                  <div className="card-body">
+                    <div className="card-date">{formatDate(e.date)}</div>
+                    {text && <p className="card-text">{text}</p>}
+                    {e.memory.tags.length > 0 && <div className="card-tags">{e.memory.tags.map((t) => `#${t}`).join(' ')}</div>}
+                    {e.split && <div className="card-split">ほかの日の写真も同じ記録にあります</div>}
+                  </div>
+                </button>
+              );
+            })}
           </section>
         ))}
       </main>
@@ -93,14 +124,4 @@ export function Timeline({ query }: { query: string }) {
       </button>
     </div>
   );
-}
-
-/** 一覧に出す文章：ひとこと、なければ最初の写真のコメント */
-function CardText({ memory }: { memory: Memory }) {
-  const [caption, setCaption] = useState<string>();
-  useEffect(() => {
-    if (!memory.text && memory.mediaIds[0]) getMedia(memory.mediaIds[0]).then((x) => setCaption(x?.caption));
-  }, [memory]);
-  const t = memory.text || caption;
-  return t ? <p className="card-text">{t}</p> : null;
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { deleteMemory, getMediaFor, getMemory, listTags, newId, saveMemory } from '../data/repository';
-import type { MediaDraft, Memory } from '../data/types';
+import type { DateSource, MediaDraft, Memory } from '../data/types';
 import { Thumb } from '../components/Thumb';
 import { TagPicker } from '../components/TagPicker';
 import { importFile } from '../lib/media';
@@ -41,12 +41,19 @@ export function Editor({ id }: { id?: string }) {
     })();
   }, [id]);
 
-  // 撮影日を優先して日付を自動で入れる（いちばん古い撮影日）
+  // 記録の日付は、写真・動画のいちばん古い日付を自動で入れる
   useEffect(() => {
     if (dateTouched) return;
-    const taken = media.map((m) => m.takenAt).filter((t): t is number => !!t);
+    const taken = media.filter((m) => m.takenAt && m.dateSource !== 'memory').map((m) => m.takenAt!);
     if (taken.length) setDate(Math.min(...taken));
   }, [media, dateTouched]);
+
+  /** 写真1枚の日付を手で直す */
+  const setMediaDate = (id: string, t: number) =>
+    setMedia((l) => l.map((x) => (x.id === id ? { ...x, takenAt: t, dateSource: 'manual' as const } : x)));
+
+  const sortByDate = () => setMedia((l) => [...l].sort((a, b) => (a.takenAt ?? date) - (b.takenAt ?? date)));
+  const outOfOrder = media.some((m, i) => i > 0 && (m.takenAt ?? date) < (media[i - 1].takenAt ?? date));
 
   async function onFiles(files: FileList | null) {
     if (!files?.length) return;
@@ -90,7 +97,15 @@ export function Editor({ id }: { id?: string }) {
       ? { ...memory, text: text.trim(), tags, date }
       : { id: newId(), text: text.trim(), tags, date, mediaIds: [], createdAt: now, updatedAt: now };
     try {
-      await saveMemory(m, media.map((x) => ({ ...x, caption: x.caption?.trim() || undefined })));
+      await saveMemory(
+        m,
+        media.map((x) => ({
+          ...x,
+          caption: x.caption?.trim() || undefined,
+          // 日付がわからない写真は、記録の日付を使う
+          ...(!x.takenAt || x.dateSource === 'memory' ? { takenAt: date, dateSource: 'memory' as const } : {}),
+        })),
+      );
       history.back();
     } catch (e) {
       setBusy(false);
@@ -160,16 +175,35 @@ export function Editor({ id }: { id?: string }) {
                     <button onClick={() => move(i, 1)} disabled={i === media.length - 1} aria-label="後へ">›</button>
                   </div>
                 </div>
-                <VoiceText
-                  compact
-                  rows={3}
-                  value={m.caption ?? ''}
-                  onChange={(v) => setMedia((l) => l.map((x) => (x.id === m.id ? { ...x, caption: v } : x)))}
-                  placeholder="この写真のコメント（その時の思い）"
-                />
+                <div className="media-meta">
+                  <div className="media-date">
+                    <input
+                      type="datetime-local"
+                      aria-label="この写真の日付"
+                      value={toLocalInput(m.takenAt && m.dateSource !== 'memory' ? m.takenAt : date)}
+                      onChange={(e) => {
+                        const t = new Date(e.target.value).getTime();
+                        if (!isNaN(t)) setMediaDate(m.id, t);
+                      }}
+                    />
+                    <span className={`date-source ${weakSource(m) ? 'weak' : ''}`}>{sourceLabel(m)}</span>
+                  </div>
+                  <VoiceText
+                    compact
+                    rows={3}
+                    value={m.caption ?? ''}
+                    onChange={(v) => setMedia((l) => l.map((x) => (x.id === m.id ? { ...x, caption: v } : x)))}
+                    placeholder="この写真のコメント（その時の思い）"
+                  />
+                </div>
               </div>
             ))}
           </div>
+          {outOfOrder && (
+            <button type="button" className="btn small" onClick={sortByDate}>
+              日付順に並べ替える
+            </button>
+          )}
           <div className="row">
             <button className="btn big" onClick={() => cameraRef.current?.click()} disabled={busy}>
               📷 撮影する
@@ -190,7 +224,7 @@ export function Editor({ id }: { id?: string }) {
         </section>
 
         <section>
-          <h2 className="label">日付</h2>
+          <h2 className="label">記録の日付</h2>
           <input
             type="datetime-local"
             value={toLocalInput(date)}
@@ -202,7 +236,12 @@ export function Editor({ id }: { id?: string }) {
               }
             }}
           />
-          {!dateTouched && media.some((m) => m.takenAt) && <p className="muted small">写真・動画の撮影日から自動で入れました</p>}
+          <p className="muted small">
+            {!dateTouched && media.some((m) => m.takenAt && m.dateSource !== 'memory')
+              ? 'いちばん古い写真・動画の日付を自動で入れました。'
+              : ''}
+            日付がわからない写真や、文字だけの記録はこの日付になります。
+          </p>
         </section>
 
         <section>
@@ -234,3 +273,19 @@ export function Editor({ id }: { id?: string }) {
     </div>
   );
 }
+
+const SOURCE_LABELS: Record<DateSource, string> = {
+  exif: '撮影日（写真のデータ）',
+  video: '撮影日（動画のデータ）',
+  file: 'ファイルの日付（撮影日が見つかりません）',
+  memory: '撮影日が見つかりません（記録の日付）',
+  manual: '手で入力した日付',
+};
+
+function sourceLabel(m: MediaDraft): string {
+  if (!m.takenAt) return SOURCE_LABELS.memory;
+  return m.dateSource ? SOURCE_LABELS[m.dateSource] : '以前に保存した日付';
+}
+
+/** 撮影日ではない（あてにならない）日付か */
+const weakSource = (m: MediaDraft) => !m.takenAt || m.dateSource === 'file' || m.dateSource === 'memory';

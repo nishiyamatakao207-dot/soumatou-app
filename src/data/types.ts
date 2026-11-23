@@ -14,6 +14,14 @@ export interface Memory {
 
 export type MediaKind = 'photo' | 'video';
 
+/** 写真・動画の日付をどこから取ったか */
+export type DateSource =
+  | 'exif' // 写真のデータに入っていた撮影日
+  | 'video' // 動画のデータに入っていた撮影日
+  | 'file' // ファイルの日付（参考）
+  | 'memory' // 記録の日付
+  | 'manual'; // 手で入力
+
 /**
  * 写真・動画の情報（ファイルの中身は files テーブルに別保存）。
  * 中身を分けておくと、一覧や再生で必要な分だけ読み込める。
@@ -22,8 +30,10 @@ export interface MediaItem {
   id: string;
   memoryId: string;
   kind: MediaKind;
-  /** 撮影日時（わかった場合） */
+  /** この写真・動画の日時（並び順・表示に使う） */
   takenAt?: number;
+  /** takenAt をどこから取ったか */
+  dateSource?: DateSource;
   /** この写真・動画へのコメント（その時の思い） */
   caption?: string;
   /** 一覧用の小さい画像があるか */

@@ -44,6 +44,33 @@ export async function getMediaFor(memory: Memory): Promise<MediaItem[]> {
   return withMissing(rows);
 }
 
+/** 写真・動画1枚ずつ（写真のない記録は記録1つ）を、それぞれの日付で並べたもの */
+export interface DatedItem {
+  memory: Memory;
+  media?: MediaItem;
+  /** この1枚の日付（写真の日付、なければ記録の日付） */
+  date: number;
+}
+
+/**
+ * 再生・一覧の元になる並び。
+ * タグは記録で絞り込み、期間は写真1枚ごとの日付で絞り込む。
+ * 同じ日時のときは、記録の中での並び順を保つ。
+ */
+export async function listDatedItems(filter?: MemoryFilter): Promise<DatedItem[]> {
+  const memories = await listMemories(filter ? { tags: filter.tags } : undefined);
+  const items: (DatedItem & { order: number })[] = [];
+  let order = 0;
+  for (const m of memories) {
+    const media = await getMediaFor(m);
+    if (!media.length) items.push({ memory: m, date: m.date, order: order++ });
+    for (const x of media) items.push({ memory: m, media: x, date: x.takenAt ?? m.date, order: order++ });
+  }
+  return items
+    .filter((it) => (filter?.from == null || it.date >= filter.from) && (filter?.to == null || it.date <= filter.to))
+    .sort((a, b) => a.date - b.date || a.order - b.order);
+}
+
 /** 保存したファイルを Blob に戻す（表示のたびに呼ぶ） */
 export async function loadFile(id: string): Promise<Blob | null> {
   const f = await db.files.get(id);

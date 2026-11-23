@@ -14,3 +14,15 @@ export function toLocalInput(ms: number): string {
 export function toDateInput(ms: number): string {
   return toLocalInput(ms).slice(0, 10);
 }
+
+/** 控えめな日付表示（例：2026.8.15） */
+export function formatDot(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`;
+}
+
+/** 同じ日かどうかの判定用（この端末の時刻で） */
+export function dayKey(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}

@@ -17,14 +17,7 @@ export async function importFile(file: File): Promise<MediaDraft> {
  * iPhone の HEIC もここで JPEG に変換されるので、どの画面でも表示できる。
  */
 async function importPhoto(file: File): Promise<MediaDraft> {
-  let takenAt: number | undefined;
-  try {
-    const exif = await exifr.parse(file);
-    const d: Date | undefined = exif?.DateTimeOriginal ?? exif?.CreateDate;
-    if (d instanceof Date && !isNaN(d.getTime())) takenAt = d.getTime();
-  } catch {
-    /* EXIFなし */
-  }
+  const exifDate = await readExifDate(file);
 
   const src = await decodeImage(file);
   try {
@@ -37,7 +30,7 @@ async function importPhoto(file: File): Promise<MediaDraft> {
       file: photo,
       thumbFile: thumb,
       hasThumb: true,
-      takenAt: takenAt ?? fallbackDate(file),
+      ...pickDate(exifDate, 'exif', file),
     };
   } finally {
     src.close();
@@ -68,7 +61,7 @@ async function importVideo(file: File): Promise<MediaDraft> {
   if (file.size > MAX_VIDEO_MB * 1024 * 1024) {
     throw new Error(`${MAX_VIDEO_MB}MBを超える動画は追加できません（短めの動画がおすすめです）`);
   }
-  const takenAt = (await readMp4CreationTime(file)) ?? fallbackDate(file);
+  const videoDate = await readVideoDate(file).catch(() => undefined);
   const thumb = await videoFirstFrame(file).catch(() => undefined);
   return {
     id: newId(),
@@ -77,13 +70,53 @@ async function importVideo(file: File): Promise<MediaDraft> {
     file: new Blob([await file.arrayBuffer()], { type: file.type || 'video/mp4' }),
     thumbFile: thumb,
     hasThumb: !!thumb,
-    takenAt,
+    ...pickDate(videoDate, 'video', file),
   };
 }
 
-function fallbackDate(file: File): number | undefined {
-  // lastModified はコピーで変わることもあるので「参考値」
-  return file.lastModified || undefined;
+/**
+ * 日付の決め方：撮影日 → ファイルの日付 → （保存時に）記録の日付。
+ * ファイルの日付はコピーや選び方で変わることがあるので「参考」扱い。
+ */
+function pickDate(taken: number | undefined, source: 'exif' | 'video', file: File): Pick<MediaDraft, 'takenAt' | 'dateSource'> {
+  if (taken) return { takenAt: taken, dateSource: source };
+  if (file.lastModified) return { takenAt: file.lastModified, dateSource: 'file' };
+  return { takenAt: undefined, dateSource: undefined };
+}
+
+const validDate = (d: unknown): number | undefined =>
+  d instanceof Date && !isNaN(d.getTime()) && d.getTime() > Date.UTC(1990, 0) && d.getTime() < Date.now() + 864e5 ? d.getTime() : undefined;
+
+/** 写真の撮影日（EXIF）。撮影した瞬間 → データ作成日 の順に探す */
+export async function readExifDate(file: Blob): Promise<number | undefined> {
+  try {
+    const exif = await exifr.parse(file);
+    return validDate(exif?.DateTimeOriginal) ?? validDate(exif?.CreateDate) ?? validDate(exif?.DateTimeDigitized);
+  } catch {
+    return undefined; // EXIFなし
+  }
+}
+
+/** 動画の撮影日。iPhone の動画は「com.apple.quicktime.creationdate」（現地時刻）を優先 */
+async function readVideoDate(file: Blob): Promise<number | undefined> {
+  return (await readQuickTimeCreationDate(file)) ?? (await readMp4CreationTime(file));
+}
+
+function ends(file: Blob) {
+  const CHUNK = 1024 * 1024;
+  const parts = [file.slice(0, CHUNK)];
+  if (file.size > CHUNK) parts.push(file.slice(Math.max(CHUNK, file.size - CHUNK)));
+  return parts;
+}
+
+async function readQuickTimeCreationDate(file: Blob): Promise<number | undefined> {
+  for (const part of ends(file)) {
+    const text = new TextDecoder('latin1').decode(await part.arrayBuffer());
+    if (!text.includes('com.apple.quicktime.creationdate')) continue;
+    const m = text.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})([+-]\d{2}):?(\d{2})/);
+    if (m) return validDate(new Date(`${m[1]}${m[2]}:${m[3]}`));
+  }
+  return undefined;
 }
 
 function toJpeg(src: CanvasImageSource, w: number, h: number, max: number, q: number) {
@@ -153,10 +186,7 @@ function videoFirstFrame(file: Blob): Promise<Blob> {
  * 情報はファイルの先頭か末尾にあることが多いので、両端だけ読む。
  */
 async function readMp4CreationTime(file: Blob): Promise<number | undefined> {
-  const CHUNK = 1024 * 1024;
-  const parts = [file.slice(0, CHUNK)];
-  if (file.size > CHUNK) parts.push(file.slice(Math.max(CHUNK, file.size - CHUNK)));
-  for (const part of parts) {
+  for (const part of ends(file)) {
     const buf = new Uint8Array(await part.arrayBuffer());
     for (let i = 0; i < buf.length - 24; i++) {
       // 'm' 'v' 'h' 'd'
