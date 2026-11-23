@@ -3,6 +3,8 @@ import { BgmPicker } from '../components/BgmPicker';
 import { digestAvailable } from '../lib/digest';
 import { useSetting } from '../lib/settings';
 import { navigate } from '../router';
+import { lastBackupAt } from '../lib/backup';
+import { formatDate } from '../lib/format';
 
 /** 設定 */
 export function Settings() {
@@ -10,6 +12,7 @@ export function Settings() {
   const [showDate, setShowDate] = useSetting('showDate');
   const [onThisDay, setOnThisDay] = useSetting('onThisDay');
   const [canDigest, setCanDigest] = useState(false);
+  const last = lastBackupAt();
   useEffect(() => {
     digestAvailable().then(setCanDigest);
   }, []);
@@ -57,6 +60,15 @@ export function Settings() {
         </section>
         <section className="setting">
           <BgmPicker />
+        </section>
+        <section className="setting">
+          <div className="setting-row" onClick={() => navigate('/backup')} role="button" tabIndex={0}>
+            <span>
+              <strong>バックアップ</strong>
+              <small>{last ? `最後のバックアップ：${formatDate(last)}` : 'まだバックアップしていません'}</small>
+            </span>
+            <span className="chev">›</span>
+          </div>
         </section>
       </main>
     </div>

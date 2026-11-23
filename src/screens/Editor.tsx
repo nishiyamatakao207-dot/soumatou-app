@@ -186,7 +186,7 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
               その日が来たら、アプリを開いたときにお知らせします。
             </p>
             <p className="muted small">
-              手紙はこの端末の中だけに保存されます。機種変更や初期化で消えないよう、バックアップをおすすめします。
+              手紙はこの端末の中だけに保存されます。機種変更や初期化で消えないよう、設定の「バックアップ」で保管してください。
             </p>
             <button
               className="btn primary big"

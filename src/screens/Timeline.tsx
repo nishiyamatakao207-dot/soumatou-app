@@ -10,6 +10,7 @@ import { startVoice } from '../lib/voiceSession';
 import { StarSky } from '../components/StarSky';
 import { OnThisDayCard } from '../components/OnThisDayCard';
 import { LetterShelf } from '../components/LetterShelf';
+import { BackupReminder } from '../components/BackupReminder';
 
 /** 一覧の1枚のカード：1つの記録のうち、同じ日の写真・動画のまとまり */
 interface Entry {
@@ -104,6 +105,7 @@ export function Timeline({ query }: { query: string }) {
       <StarSky />
       <LetterShelf />
       <OnThisDayCard />
+      <BackupReminder />
 
       <FilterBar value={filter} onChange={setFilter} tags={tags} />
       {hasFilter && (

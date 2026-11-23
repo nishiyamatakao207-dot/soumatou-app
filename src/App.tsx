@@ -7,6 +7,7 @@ import { Export } from './screens/Export';
 import { AddFeeling } from './screens/AddFeeling';
 import { Settings } from './screens/Settings';
 import { Letter } from './screens/Letter';
+import { Backup } from './screens/Backup';
 import { readSetting } from './lib/settings';
 import { DIGEST_AGAIN_MS, digestAvailable } from './lib/digest';
 import { shouldAnnounce } from './lib/onThisDay';
@@ -54,6 +55,8 @@ export function App() {
       return <Export query={route.query} />;
     case 'settings':
       return <Settings />;
+    case 'backup':
+      return <Backup />;
     case 'letter':
       return <Letter key={route.id} id={route.id} />;
     default:
