@@ -8,6 +8,7 @@ import { AddFeeling } from './screens/AddFeeling';
 import { Settings } from './screens/Settings';
 import { Letter } from './screens/Letter';
 import { Backup } from './screens/Backup';
+import { VoiceCheck } from './screens/VoiceCheck';
 import { readSetting } from './lib/settings';
 import { DIGEST_AGAIN_MS, digestAvailable } from './lib/digest';
 import { shouldAnnounce } from './lib/onThisDay';
@@ -57,6 +58,8 @@ export function App() {
       return <Settings />;
     case 'backup':
       return <Backup />;
+    case 'voicecheck':
+      return <VoiceCheck />;
     case 'letter':
       return <Letter key={route.id} id={route.id} />;
     default:

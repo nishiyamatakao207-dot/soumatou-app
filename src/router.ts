@@ -13,7 +13,8 @@ export type Route =
   | { name: 'digest' }
   | { name: 'letter'; id: string }
   | { name: 'settings' }
-  | { name: 'backup' };
+  | { name: 'backup' }
+  | { name: 'voicecheck' };
 
 export function parseRoute(hash: string): Route {
   const [path, query = ''] = hash.replace(/^#/, '').split('?');
@@ -27,6 +28,7 @@ export function parseRoute(hash: string): Route {
   if (seg[0] === 'letter' && seg[1]) return { name: 'letter', id: decodeURIComponent(seg[1]) };
   if (seg[0] === 'settings') return { name: 'settings' };
   if (seg[0] === 'backup') return { name: 'backup' };
+  if (seg[0] === 'voicecheck') return { name: 'voicecheck' };
   return { name: 'timeline', query };
 }
 

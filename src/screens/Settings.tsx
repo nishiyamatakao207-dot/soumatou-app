@@ -66,6 +66,15 @@ export function Settings() {
           <BgmPicker />
         </section>
         <section className="setting">
+          <div className="setting-row" onClick={() => navigate('/voicecheck')} role="button" tabIndex={0}>
+            <span>
+              <strong>音声入力の診断</strong>
+              <small>声で入力できないときに、原因を調べるための画面です</small>
+            </span>
+            <span className="chev">›</span>
+          </div>
+        </section>
+        <section className="setting">
           <div className="setting-row" onClick={() => navigate('/backup')} role="button" tabIndex={0}>
             <span>
               <strong>バックアップ</strong>

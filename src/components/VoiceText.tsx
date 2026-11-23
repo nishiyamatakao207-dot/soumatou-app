@@ -40,7 +40,13 @@ export function VoiceText({
         </button>
       )}
       {speech.listening && <p className="muted small">聞いています…（話し終わると自動で止まります。続けるときは、もう一度押してください）</p>}
-      {speech.error && <p className="error small">{speech.error}</p>}
+      {speech.error && (
+        <p className="error small">
+          {speech.error}
+          <br />
+          <a href="#/voicecheck">うまくいかないときは「音声入力の診断」へ</a>
+        </p>
+      )}
     </div>
   );
 }

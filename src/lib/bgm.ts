@@ -76,9 +76,35 @@ export function unlockAudioOutput() {
   }
 }
 
-function releaseAudioOutput() {
+export function releaseAudioOutput() {
   keepAliveUsers = Math.max(0, keepAliveUsers - 1);
   if (keepAliveUsers === 0) keepAlive?.pause();
+}
+
+/**
+ * マイクを使う前に呼ぶ：音楽用の設定（再生だけのモード）をやめ、無音の音声も止める。
+ * iPhone は「再生だけのモード」のままだと、マイクを渡してくれないことがある。
+ */
+export function prepareForMicrophone(): string {
+  try {
+    keepAlive?.pause();
+  } catch {
+    /* 止まっている */
+  }
+  keepAliveUsers = 0;
+  const s = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
+  if (!s) return 'audioSessionなし';
+  const before = s.type;
+  try {
+    s.type = 'play-and-record';
+  } catch {
+    try {
+      s.type = 'auto';
+    } catch {
+      /* 変えられない */
+    }
+  }
+  return `audioSession ${before}→${s.type}`;
 }
 
 /** iPhone のマナーモード（消音スイッチ）中でも音が出るようにお願いする（対応している iOS のみ） */
