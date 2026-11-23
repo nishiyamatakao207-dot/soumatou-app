@@ -83,6 +83,7 @@ export function Settings() {
             <span className="chev">›</span>
           </div>
         </section>
+        <p className="muted small app-version">めぐる　版：{__BUILD__}</p>
       </main>
     </div>
   );

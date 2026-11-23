@@ -2,8 +2,12 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// 画面に出す「版」（公開した日時）。スマホが新しい版になっているかを確かめるため
+const BUILD = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+
 export default defineConfig({
   base: './',
+  define: { __BUILD__: JSON.stringify(BUILD) },
   // 試用ページ（1ファイル版）では、あとから読み込む部品も1つにまとめる
   build: process.env.ARTIFACT ? { rollupOptions: { output: { inlineDynamicImports: true } } } : {},
   plugins: [

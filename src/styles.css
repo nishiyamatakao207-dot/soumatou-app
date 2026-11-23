@@ -488,3 +488,4 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .voice-check-text { margin: 12px 0 0; min-height: 1.6em; font-size: 16px; overflow-wrap: anywhere; }
 .voice-log { margin: 8px 0 0; max-height: 50vh; overflow: auto; padding: 10px; border-radius: 8px; background: var(--bg); font-size: 11px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-all; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+.app-version { text-align: center; margin: 8px 0 0; }
