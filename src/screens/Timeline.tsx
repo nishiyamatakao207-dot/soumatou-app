@@ -36,7 +36,10 @@ export function Timeline({ query }: { query: string }) {
   return (
     <div className="screen">
       <header className="topbar">
-        <h1 className="logo">走馬灯</h1>
+        <div className="brand">
+          <h1 className="logo">めぐる</h1>
+          <p className="tagline">声と写真の思い出ムービー</p>
+        </div>
         <button className="btn primary" disabled={!memories?.length} onClick={() => navigate(`/play?${filterToQuery(filter)}`)}>
           ▶ 再生
         </button>
@@ -60,7 +63,7 @@ export function Timeline({ query }: { query: string }) {
             ) : (
               <>
                 <p className="empty-title">最初の思い出を残しましょう</p>
-                <p className="muted">写真や動画と、その時の気持ちを記録すると、あとで走馬灯のように見返せます。</p>
+                <p className="muted">写真や動画と、その時の気持ちを記録すると、あとで思い出ムービーとして見返せます。</p>
               </>
             )}
           </div>

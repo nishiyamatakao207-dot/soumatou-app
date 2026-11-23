@@ -282,6 +282,7 @@ export function Player({ query }: { query: string }) {
     return (
       <div className="player center intro">
         <div className="intro-mark" />
+        <p className="intro-brand">めぐる</p>
         <p className="intro-sub">{describeFilter(filter)}</p>
         <p className="intro-count">
           {formatDate(slides[0].memory.date)}

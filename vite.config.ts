@@ -12,9 +12,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg'],
       manifest: {
-        name: '走馬灯 — 思い出アルバム',
-        short_name: '走馬灯',
-        description: '写真・動画・気持ちを記録して、走馬灯のように見返すアプリ',
+        name: 'めぐる — 声と写真の思い出ムービー',
+        short_name: 'めぐる',
+        description: '声と写真の思い出ムービー。写真・動画とその時の気持ちを記録して、ムービーのように見返せます',
         lang: 'ja',
         start_url: './',
         scope: './',
