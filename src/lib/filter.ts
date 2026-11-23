@@ -17,12 +17,25 @@ export interface FilterState {
   /** custom のとき 'YYYY-MM-DD' */
   from?: string;
   to?: string;
+  /** ◯年前の今日：'MM-DD'（その月日の、去年より前の記録） */
+  day?: string;
+}
+
+/** 2/29 の記録は、うるう年でない年は 2/28 に出す */
+export function monthDaysFor(day: string, year = new Date().getFullYear()): string[] {
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  return day === '02-28' && !leap ? ['02-28', '02-29'] : [day];
 }
 
 export const EMPTY_FILTER: FilterState = { tags: [], period: 'all' };
 
 export function toMemoryFilter(f: FilterState): MemoryFilter {
   const y = new Date().getFullYear();
+  if (f.day) {
+    // 今日より前（＝去年以前）の、同じ月日の記録
+    const today = new Date();
+    return { tags: f.tags, monthDays: monthDaysFor(f.day), to: new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime() - 1 };
+  }
   switch (f.period) {
     case 'thisYear':
       return { tags: f.tags, from: new Date(y, 0, 1).getTime(), to: new Date(y + 1, 0, 1).getTime() - 1 };
@@ -47,6 +60,7 @@ export function filterToQuery(f: FilterState): string {
   if (f.period !== 'all') q.set('period', f.period);
   if (f.from) q.set('from', f.from);
   if (f.to) q.set('to', f.to);
+  if (f.day) q.set('day', f.day);
   return q.toString();
 }
 
@@ -57,10 +71,15 @@ export function filterFromQuery(s: string): FilterState {
     period: (q.get('period') as PeriodKey) ?? 'all',
     from: q.get('from') ?? undefined,
     to: q.get('to') ?? undefined,
+    day: q.get('day') ?? undefined,
   };
 }
 
 export function describeFilter(f: FilterState): string {
+  if (f.day) {
+    const [m, d] = f.day.split('-').map(Number);
+    return `◯年前の今日（${m}月${d}日）`;
+  }
   const parts: string[] = [];
   if (f.period !== 'all') parts.push(f.period === 'custom' ? `${f.from ?? ''}〜${f.to ?? ''}` : PERIOD_LABELS[f.period]);
   if (f.tags.length) parts.push(f.tags.map((t) => `#${t}`).join(' '));

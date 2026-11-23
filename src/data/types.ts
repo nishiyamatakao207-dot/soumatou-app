@@ -64,4 +64,6 @@ export interface MemoryFilter {
   tags: string[];
   from?: number;
   to?: number;
+  /** この月日（'MM-DD'）だけ。年はどれでもよい（◯年前の今日） */
+  monthDays?: string[];
 }

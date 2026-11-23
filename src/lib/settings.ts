@@ -14,9 +14,11 @@ export interface Settings {
   lastTags: string[];
   /** アプリを開いたときに「今日のひとめぐり」を流す */
   dailyDigest: boolean;
+  /** 「◯年前の今日」の記録があればお知らせする */
+  onThisDay: boolean;
 }
 
-const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true };
+const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true };
 
 /** 画面の外（起動時の判定など）から設定を読む */
 export const readSetting = <K extends keyof Settings>(key: K): Settings[K] => read()[key];

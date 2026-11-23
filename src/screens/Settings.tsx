@@ -8,6 +8,7 @@ import { navigate } from '../router';
 export function Settings() {
   const [dailyDigest, setDailyDigest] = useSetting('dailyDigest');
   const [showDate, setShowDate] = useSetting('showDate');
+  const [onThisDay, setOnThisDay] = useSetting('onThisDay');
   const [canDigest, setCanDigest] = useState(false);
   useEffect(() => {
     digestAvailable().then(setCanDigest);
@@ -35,6 +36,15 @@ export function Settings() {
             ▶ 今すぐ見る
           </button>
           {!canDigest && <p className="muted small">写真が3枚以上になると見られます。</p>}
+        </section>
+        <section className="setting">
+          <label className="setting-row">
+            <span>
+              <strong>◯年前の今日</strong>
+              <small>去年やおととしの同じ日の記録があれば、アプリを開いたときにお知らせします</small>
+            </span>
+            <input type="checkbox" className="toggle" checked={onThisDay} onChange={(e) => setOnThisDay(e.target.checked)} />
+          </label>
         </section>
         <section className="setting">
           <label className="setting-row">

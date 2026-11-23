@@ -8,6 +8,7 @@ import { dayKey, formatDate, formatMonth } from '../lib/format';
 import { navigate } from '../router';
 import { startVoice } from '../lib/voiceSession';
 import { StarSky } from '../components/StarSky';
+import { OnThisDayCard } from '../components/OnThisDayCard';
 
 /** 一覧の1枚のカード：1つの記録のうち、同じ日の写真・動画のまとまり */
 interface Entry {
@@ -100,6 +101,7 @@ export function Timeline({ query }: { query: string }) {
       </header>
 
       <StarSky />
+      <OnThisDayCard />
 
       <FilterBar value={filter} onChange={setFilter} tags={tags} />
       {hasFilter && (

@@ -329,7 +329,7 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
         )}
 
         {prev !== null && slides[prev] && (
-          <SlideView key={slides[prev].key} slide={slides[prev]} index={prev} vw={vw} vh={vh} leaving playing={false} muted showDate={showDate} />
+          <SlideView key={slides[prev].key} slide={slides[prev]} index={prev} vw={vw} vh={vh} leaving playing={false} muted showDate={showDate} ago={!!filter.day} />
         )}
         <SlideView
           key={current.key}
@@ -341,6 +341,7 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
           playing={!paused && !finished}
           muted={muted}
           showDate={showDate}
+          ago={!!filter.day}
           onImage={onPalette}
           onVideoDuration={onVideoDuration}
           onVideoEnded={onVideoEnded}
@@ -428,6 +429,7 @@ function SlideView({
   playing,
   muted,
   showDate,
+  ago,
   onImage,
   onVideoDuration,
   onVideoEnded,
@@ -440,6 +442,8 @@ function SlideView({
   playing: boolean;
   muted: boolean;
   showDate: boolean;
+  /** ◯年前の今日：日付の横に「◯年前」を出す */
+  ago?: boolean;
   onImage?: (key: string, img: HTMLImageElement) => void;
   onVideoDuration?: (i: number, sec: number) => void;
   onVideoEnded?: (i: number) => void;
@@ -484,7 +488,12 @@ function SlideView({
         </div>
         {((slide.comment && media) || showDate) && (
           <div className="slide-caption" style={{ left: p.commentLeft, width: p.commentWidth, top: p.d * 0.92 - 6 }}>
-            {showDate && <p className="slide-date">{formatDot(slide.date)}</p>}
+            {showDate && (
+              <p className="slide-date">
+                {formatDot(slide.date)}
+                {ago && ` ・ ${new Date().getFullYear() - new Date(slide.date).getFullYear()}年前`}
+              </p>
+            )}
             {slide.comment && media && <p className="slide-comment">{slide.comment}</p>}
           </div>
         )}

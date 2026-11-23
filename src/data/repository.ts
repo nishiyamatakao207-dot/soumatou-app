@@ -44,6 +44,12 @@ export async function getMediaFor(memory: Memory): Promise<MediaItem[]> {
   return withMissing(rows);
 }
 
+/** 'MM-DD'（この端末の時刻で） */
+export const monthDayOf = (ms: number) => {
+  const d = new Date(ms);
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 /** 写真・動画1枚ずつ（写真のない記録は記録1つ）を、それぞれの日付で並べたもの */
 export interface DatedItem {
   memory: Memory;
@@ -68,6 +74,7 @@ export async function listDatedItems(filter?: MemoryFilter): Promise<DatedItem[]
   }
   return items
     .filter((it) => (filter?.from == null || it.date >= filter.from) && (filter?.to == null || it.date <= filter.to))
+    .filter((it) => !filter?.monthDays || filter.monthDays.includes(monthDayOf(it.date)))
     .sort((a, b) => a.date - b.date || a.order - b.order);
 }
 
