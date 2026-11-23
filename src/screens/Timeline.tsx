@@ -7,6 +7,7 @@ import { describeFilter, filterFromQuery, filterToQuery, toMemoryFilter, type Fi
 import { dayKey, formatDate, formatMonth } from '../lib/format';
 import { navigate } from '../router';
 import { startVoice } from '../lib/voiceSession';
+import { StarSky } from '../components/StarSky';
 
 /** 一覧の1枚のカード：1つの記録のうち、同じ日の写真・動画のまとまり */
 interface Entry {
@@ -97,6 +98,8 @@ export function Timeline({ query }: { query: string }) {
           </button>
         </div>
       </header>
+
+      <StarSky />
 
       <FilterBar value={filter} onChange={setFilter} tags={tags} />
       {hasFilter && (

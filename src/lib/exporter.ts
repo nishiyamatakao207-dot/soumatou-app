@@ -18,6 +18,7 @@ import {
 import { DEFAULT_PALETTE, extractPalette, type Palette } from './palette';
 import { BGM_VOLUME, DUCK, bgmBuffer } from './bgm';
 import { SAMPLE_RATE, type BgmChoice } from './music';
+import { SEASON_TINT, particles, seasonOf, type Particle, type Season } from './season';
 
 /* 思い出ムービーを動画ファイル（MP4）にする。
  *
@@ -214,7 +215,7 @@ function blurred(photo: CanvasImageSource, pw: number, ph: number): HTMLCanvasEl
 }
 
 /** 背景：写真の色の地＋大きくぼかした写真＋光＋周辺を暗く（画面の .bg と同じ構成） */
-function renderBackground(photo: CanvasImageSource | undefined, pw: number, ph: number, pal: Palette): HTMLCanvasElement {
+function renderBackground(photo: CanvasImageSource | undefined, pw: number, ph: number, pal: Palette, season: Season): HTMLCanvasElement {
   const c = canvas(W, H);
   const ctx = c.getContext('2d')!;
   ctx.fillStyle = pal.base;
@@ -243,6 +244,19 @@ function renderBackground(photo: CanvasImageSource | undefined, pw: number, ph: 
   };
   glow(W * 0.22, H * 0.28, W * 0.7, H * 0.5, pal.glow1);
   glow(W * 0.8, H * 0.74, W * 0.65, H * 0.55, pal.glow2);
+  // 写真を撮った季節の色（画面の .bg-season と同じ）
+  for (const tn of SEASON_TINT[season]) {
+    ctx.save();
+    ctx.translate(W * tn.x, H * tn.y);
+    ctx.scale(1, (H * tn.ry) / (W * tn.rx));
+    const r = W * tn.rx;
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+    g.addColorStop(0, tn.color);
+    g.addColorStop(0.7, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(-r, -r, r * 2, r * 2);
+    ctx.restore();
+  }
   // 周辺を暗く
   ctx.save();
   ctx.translate(W * 0.5, H * 0.48);
@@ -272,7 +286,7 @@ async function prepare(slide: Slide): Promise<Prepared> {
       const cctx = circle.getContext('2d')!;
       drawCover(cctx, img, w, h, px);
       featherMask(cctx, px);
-      const bg = renderBackground(img, w, h, palette);
+      const bg = renderBackground(img, w, h, palette, seasonOf(slide.date));
       if ('close' in img) img.close();
       return { placement, palette, bg, circle, missing: false, dispose: () => {} };
     }
@@ -302,7 +316,7 @@ async function prepare(slide: Slide): Promise<Prepared> {
         [bw, bh] = sizeOf(t);
         bgSrc = t;
       }
-      const bg = renderBackground(bgSrc, bw, bh, palette);
+      const bg = renderBackground(bgSrc, bw, bh, palette, seasonOf(slide.date));
       if (bgSrc && 'close' in bgSrc) (bgSrc as ImageBitmap).close();
       return {
         placement,
@@ -322,7 +336,13 @@ async function prepare(slide: Slide): Promise<Prepared> {
   }
 
   // 写真のない記録・見つからない写真
-  return { placement, palette: DEFAULT_PALETTE, bg: renderBackground(undefined, 0, 0, DEFAULT_PALETTE), missing: !!media, dispose: () => {} };
+  return {
+    placement,
+    palette: DEFAULT_PALETTE,
+    bg: renderBackground(undefined, 0, 0, DEFAULT_PALETTE, seasonOf(slide.date)),
+    missing: !!media,
+    dispose: () => {},
+  };
 }
 
 /** 動画の指定の時刻のコマに合わせる */
@@ -609,8 +629,14 @@ class Renderer {
     const pal1 = curBg?.palette ?? DEFAULT_PALETTE;
     const pal0 = prevBg?.palette ?? pal1;
     const colA = mixRgb(pal0.glow1, pal1.glow1, bgAlpha);
-    const colB = mixRgb(pal0.glow2, pal1.glow2, bgAlpha);
-    this.drawMotes(t / 1000, colA, colB);
+    this.drawMotes(t / 1000, colA);
+
+    // 季節の粒：季節が変わったら、新しい季節の粒がふわっと出てくる
+    const s1 = seasonOf(this.slides[current].date);
+    const s0 = current > 0 ? seasonOf(this.slides[current - 1].date) : s1;
+    const sa = s0 === s1 ? 1 : ease(bgAlpha);
+    if (s0 !== s1 && sa < 1) this.drawSeason(t / 1000, s0, 1 - sa);
+    this.drawSeason(t / 1000, s1, sa);
 
     ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
 
@@ -656,10 +682,72 @@ class Renderer {
     }
   }
 
-  private drawMotes(sec: number, colA: string, colB: string) {
+  /** 季節の粒（画面の SeasonParticles と同じ動き） */
+  private drawSeason(sec: number, season: Season, alpha: number) {
+    const ctx = this.ctx;
+    for (const p of particles(season)) this.drawParticle(ctx, p, sec, alpha);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+  }
+
+  private drawParticle(ctx: CanvasRenderingContext2D, p: Particle, sec: number, alpha: number) {
+    const swing = (period: number) => {
+      const cyc = (sec + p.delay) / period;
+      const n = Math.floor(cyc);
+      const f = cyc - n;
+      return easeInOut(n % 2 === 1 ? 1 - f : f);
+    };
+    let x = (p.left / 100) * LW;
+    let y: number;
+    let rot = 0;
+    let a = alpha;
+    if (p.kind === 'firefly') {
+      // その場で漂いながら明滅
+      const e = swing(p.fall);
+      x += lerp(-p.drift / 3, p.drift / 3, e);
+      y = (p.top / 100) * LH + lerp(p.drift / 5, -p.drift / 5, e);
+      a *= lerp(0.08, 1, swing(p.blink));
+    } else {
+      // 上から下へ落ちながら、左右にゆれて回る
+      const f = (((sec + p.delay) / p.fall) % 1 + 1) % 1;
+      x += p.drift * f;
+      y = lerp(-0.12 * LH, 1.12 * LH, f);
+      rot = (p.spin * f * Math.PI) / 180;
+    }
+    const w = p.size;
+    const h = p.kind === 'petal' ? p.size * 0.62 : p.kind === 'leaf' ? p.size * 0.8 : p.size;
+    ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+    ctx.translate(x + w / 2, y + h / 2);
+    ctx.rotate(rot);
+    if (p.kind !== 'firefly') ctx.translate(lerp(-p.swayPx, p.swayPx, swing(p.sway)), 0);
+    ctx.globalAlpha = a * (p.kind === 'petal' ? 0.82 : p.kind === 'leaf' ? 0.85 : p.kind === 'snow' ? 0.9 : 1);
+    if (p.kind === 'petal' || p.kind === 'leaf') {
+      const g = ctx.createRadialGradient(-w * 0.1, -h * 0.12, 0, 0, 0, w * 0.6);
+      g.addColorStop(0, p.kind === 'petal' ? '#fff7fa' : p.color);
+      g.addColorStop(p.kind === 'petal' ? 0.62 : 1, p.color);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, w / 2, h / 2, p.kind === 'leaf' ? Math.PI / 4 : 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const r = w / 2;
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 1.414);
+      g.addColorStop(0, p.kind === 'snow' ? '#ffffff' : '#fffde6');
+      g.addColorStop(p.kind === 'snow' ? 0.35 : 0.26, p.kind === 'snow' ? 'rgba(255,255,255,0.85)' : p.color);
+      g.addColorStop(0.7, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  private drawMotes(sec: number, colA: string) {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // 半分は写真の色の粒（残りの半分は季節の粒になった）
     MOTES.forEach((m, k) => {
+      if (k % 2 === 1) return;
       // CSS: mote（行って戻る、ease-in-out）。開始は負の遅れで途中から
       const cyc = (sec + m.delay) / m.dur;
       const n = Math.floor(cyc);
@@ -677,7 +765,7 @@ class Renderer {
       const R = size * Math.SQRT1_2 * sc;
       const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
       g.addColorStop(0, '#fff8ec');
-      g.addColorStop(0.22, k % 2 === 0 ? colA : colB);
+      g.addColorStop(0.22, colA);
       g.addColorStop(0.7, 'rgba(0,0,0,0)');
       ctx.globalAlpha = alpha;
       ctx.fillStyle = g;

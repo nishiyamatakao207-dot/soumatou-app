@@ -299,3 +299,82 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .icon-btn { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface-2); font-size: 18px; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
+
+/* ---- 季節の粒（再生画面・トップの星空） ---- */
+.season-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; animation: fadeIn 2.6s ease both; }
+.sp { position: absolute; top: 0; will-change: transform; }
+.sp.fall { animation: sp-fall var(--fall) linear infinite; animation-delay: calc(var(--delay) * -1); }
+.sp.float { top: var(--top); animation: sp-float var(--fall) ease-in-out infinite alternate; animation-delay: calc(var(--delay) * -1); }
+@keyframes sp-fall {
+  from { transform: translate3d(0, calc(var(--H) * -0.12), 0) rotate(0deg); }
+  to { transform: translate3d(var(--drift), calc(var(--H) * 1.12), 0) rotate(var(--spin)); }
+}
+@keyframes sp-float {
+  from { transform: translate3d(calc(var(--fx) * -1), calc(var(--fy) * -1), 0); }
+  to { transform: translate3d(var(--fx), var(--fy), 0); }
+}
+.sp-in { will-change: transform, opacity; }
+.sp-in.petal, .sp-in.leaf, .sp-in.snow { animation: sp-sway var(--sway) ease-in-out infinite alternate; }
+@keyframes sp-sway { from { transform: translateX(calc(var(--swayPx) * -1)); } to { transform: translateX(var(--swayPx)); } }
+.sp-in.petal { border-radius: 60% 60% 50% 50% / 70% 70% 40% 40%; opacity: .82;
+  background: radial-gradient(circle at 40% 38%, #fff7fa 0%, currentColor 62%); box-shadow: 0 0 6px currentColor; }
+.sp-in.leaf { border-radius: 0 70% 0 70%; opacity: .85; background: linear-gradient(135deg, currentColor 0%, rgba(90,30,10,.85) 130%); }
+.sp-in.snow { border-radius: 50%; opacity: .9; background: radial-gradient(circle, #fff 0%, rgba(255,255,255,.85) 35%, transparent 70%); box-shadow: 0 0 6px rgba(230,240,255,.8); }
+.sp-in.firefly { border-radius: 50%; background: radial-gradient(circle, #fffde6 0%, currentColor 26%, transparent 70%); box-shadow: 0 0 10px currentColor;
+  animation: sp-blink var(--blink) ease-in-out infinite alternate; }
+@keyframes sp-blink { from { opacity: .08; } to { opacity: 1; } }
+.bg-season { position: absolute; inset: 0; }
+@media (prefers-reduced-motion: reduce) { .season-layer { display: none; } }
+
+/* ---- トップの星空 ---- */
+.sky { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); isolation: isolate; }
+.sky-spring { background: linear-gradient(180deg, #1a1430 0%, #2b1e3a 62%, #3b2538 100%); }
+.sky-summer { background: linear-gradient(180deg, #060e26 0%, #0b1b3b 62%, #0f2a3a 100%); }
+.sky-autumn { background: linear-gradient(180deg, #150f1c 0%, #29161f 62%, #3a1f19 100%); }
+.sky-winter { background: linear-gradient(180deg, #0a1325 0%, #14223b 62%, #22324c 100%); }
+.sky-tint { position: absolute; inset: 0; }
+/* 遠くの小さな星（飾り。動かないので軽い） */
+.sky-dust { position: absolute; inset: 0; opacity: .55;
+  background-image:
+    radial-gradient(1px 1px at 12px 18px, rgba(255,255,255,.7), transparent 60%),
+    radial-gradient(1px 1px at 63px 47px, rgba(255,255,255,.5), transparent 60%),
+    radial-gradient(1.2px 1.2px at 101px 12px, rgba(255,255,255,.6), transparent 60%),
+    radial-gradient(1px 1px at 37px 79px, rgba(255,255,255,.45), transparent 60%),
+    radial-gradient(1px 1px at 88px 96px, rgba(255,255,255,.5), transparent 60%);
+  background-size: 120px 110px; }
+.sky .season-layer { z-index: 1; }
+.sky-lines { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+.sky-lines polyline { fill: none; stroke: rgba(230,235,255,.16); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+
+.star { position: absolute; z-index: 3; width: 32px; height: 32px; margin: -16px 0 0 -16px; padding: 0; border: 0; background: none; border-radius: 50%; }
+.star:focus-visible { outline: 1px solid rgba(255,240,210,.8); }
+.star-core { position: absolute; left: 50%; top: 50%; width: var(--s); height: var(--s); border-radius: 50%; transform: translate(-50%, -50%);
+  background: #dfe6ff; box-shadow: 0 0 calc(var(--s) * 1.6) rgba(200,215,255,.65); }
+.star.bright .star-core { background: #fff6df; box-shadow: 0 0 calc(var(--s) * 2) rgba(255,230,180,.9), 0 0 calc(var(--s) * 4.5) rgba(255,220,160,.35); }
+.star.twinkle .star-core { animation: twinkle var(--tw) ease-in-out infinite alternate; animation-delay: calc(var(--d) * -1); }
+@keyframes twinkle { from { opacity: .42; } to { opacity: 1; } }
+/* 新しく増えた星：流れ星が落ちてきて、ぱっと光ってから落ち着く */
+.star.born .star-core { animation: starBorn 1.7s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--d); }
+@keyframes starBorn {
+  0%, 50% { opacity: 0; transform: translate(-50%, -50%) scale(.2); }
+  64% { opacity: 1; transform: translate(-50%, -50%) scale(3.2); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+.star.born::after { content: ""; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; border-radius: 50%;
+  border: 1px solid rgba(255,240,210,.95); opacity: 0; animation: starRing 1.5s ease-out both; animation-delay: calc(var(--d) + .85s); }
+@keyframes starRing { 0% { opacity: .95; transform: translate(-50%, -50%) scale(.2); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(9); } }
+.meteor { position: absolute; right: 50%; top: 50%; width: 96px; height: 2px; margin-top: -1px; border-radius: 2px; transform-origin: right center; opacity: 0;
+  background: linear-gradient(to left, rgba(255,250,235,1), rgba(255,240,210,.4) 40%, transparent); animation: meteor 1s ease-in both; animation-delay: var(--d); }
+@keyframes meteor {
+  0% { opacity: 0; transform: translate(-80px, -56px) rotate(-35deg) scaleX(.4); }
+  15% { opacity: 1; }
+  85% { opacity: 1; transform: translate(0, 0) rotate(-35deg) scaleX(1); }
+  100% { opacity: 0; transform: translate(0, 0) rotate(-35deg) scaleX(.1); }
+}
+.sky-label { position: absolute; z-index: 4; top: 10px; left: 16px; font-size: 12px; letter-spacing: .2em; color: rgba(255,244,226,.75); pointer-events: none; }
+.sky-count { position: absolute; z-index: 4; left: 16px; right: 16px; bottom: 10px; font-size: 12px; color: rgba(255,244,226,.8); letter-spacing: .06em; pointer-events: none; }
+.sky-toast { position: absolute; z-index: 5; left: 50%; bottom: 34px; transform: translateX(-50%); max-width: calc(100% - 32px); width: max-content;
+  padding: 7px 14px; border-radius: 999px; background: rgba(20,14,10,.7); border: 1px solid rgba(255,230,190,.35); color: #fff3df; font-size: 13px;
+  text-align: center; pointer-events: none; animation: toastInOut 5.2s ease both; }
+@keyframes toastInOut { 0% { opacity: 0; transform: translate(-50%, 8px); } 10%, 85% { opacity: 1; transform: translate(-50%, 0); } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .star .star-core, .meteor, .star.born::after { animation: none !important; opacity: 1; } .meteor { display: none; } }

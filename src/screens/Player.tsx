@@ -4,6 +4,8 @@ import { describeFilter, filterFromQuery, toMemoryFilter } from '../lib/filter';
 import { formatDate, formatDot } from '../lib/format';
 import { useSetting } from '../lib/settings';
 import { pickDigest } from '../lib/digest';
+import { seasonOf, tintCss } from '../lib/season';
+import { SeasonParticles } from '../components/SeasonParticles';
 import { navigate } from '../router';
 import { useStoredUrl } from '../lib/useStoredUrl';
 import { DEFAULT_PALETTE, extractPalette, type Palette } from '../lib/palette';
@@ -315,12 +317,9 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
             <span key={k} style={moteStyle(m)} />
           ))}
         </div>
-        <div className="motes-b" style={{ color: curPalette.glow2 }}>
-          {MOTES.filter((_, k) => k % 2 === 1).map((m, k) => (
-            <span key={k} style={moteStyle(m)} />
-          ))}
-        </div>
       </div>
+      {/* 写真を撮った季節の粒（春：桜、夏：ほたる、秋：紅葉、冬：雪） */}
+      <SeasonParticles key={seasonOf(current.date)} season={seasonOf(current.date)} />
 
       <div className="stage" onClick={finished ? undefined : onTap}>
         {current.memory.tags.length > 0 && (
@@ -501,6 +500,8 @@ function Background({ slide, palette }: { slide: Slide; palette: Palette }) {
   return (
     <div className="bg" style={{ backgroundColor: palette.base }}>
       {url && <img className="bg-photo" src={url} alt="" />}
+      {/* 写真を撮った季節の色を、うっすら重ねる */}
+      <div className="bg-season" style={{ background: tintCss(seasonOf(slide.date)) }} />
       <div
         className="bg-glow"
         style={{
