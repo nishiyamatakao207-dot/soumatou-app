@@ -111,6 +111,14 @@ export async function saveMemory(memory: Memory, media: MediaDraft[]): Promise<v
   if (saved.length !== files.length) throw new Error('写真・動画の保存に失敗しました');
 }
 
+/** 気持ち（ひとこと）だけを書き換える */
+export async function updateMemoryText(id: string, text: string): Promise<void> {
+  await db.memories.update(id, { text, updatedAt: Date.now() });
+}
+
+/** 気持ちが入っているか（ひとこと、または写真のコメントのどれか） */
+export const hasFeeling = (memory: Memory, media: MediaItem[]) => !!memory.text.trim() || media.some((m) => !!m.caption?.trim());
+
 export async function deleteMemory(id: string): Promise<void> {
   await db.transaction('rw', [db.memories, db.media, db.files], async () => {
     const ids = await db.media.where('memoryId').equals(id).primaryKeys();

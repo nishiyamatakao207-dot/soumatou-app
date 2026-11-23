@@ -5,7 +5,8 @@ import { useEffect, useState } from 'react';
 
 export type Route =
   | { name: 'timeline'; query: string }
-  | { name: 'new' }
+  | { name: 'new'; voice: boolean }
+  | { name: 'feel'; id: string }
   | { name: 'edit'; id: string }
   | { name: 'play'; query: string }
   | { name: 'export'; query: string };
@@ -13,7 +14,8 @@ export type Route =
 export function parseRoute(hash: string): Route {
   const [path, query = ''] = hash.replace(/^#/, '').split('?');
   const seg = path.split('/').filter(Boolean);
-  if (seg[0] === 'new') return { name: 'new' };
+  if (seg[0] === 'new') return { name: 'new', voice: new URLSearchParams(query).get('voice') === '1' };
+  if (seg[0] === 'feel' && seg[1]) return { name: 'feel', id: decodeURIComponent(seg[1]) };
   if (seg[0] === 'edit' && seg[1]) return { name: 'edit', id: decodeURIComponent(seg[1]) };
   if (seg[0] === 'play') return { name: 'play', query };
   if (seg[0] === 'export') return { name: 'export', query };

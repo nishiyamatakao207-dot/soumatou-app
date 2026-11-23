@@ -10,9 +10,11 @@ export interface Settings {
   bgm: BgmChoice;
   /** 自分の曲のファイル名（表示用） */
   customBgmName: string;
+  /** 前回の記録で使ったタグ（新しい記録で最初から選んでおく） */
+  lastTags: string[];
 }
 
-const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '' };
+const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [] };
 const KEY = 'meguru.settings';
 
 function read(): Settings {

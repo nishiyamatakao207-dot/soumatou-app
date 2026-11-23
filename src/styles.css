@@ -253,3 +253,27 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .player.center.intro { overflow-y: auto; justify-content: safe center; padding-top: calc(24px + var(--safe-top)); padding-bottom: calc(24px + var(--safe-bottom)); }
 .bgm-status { position: absolute; left: 50%; bottom: calc(20px + var(--safe-bottom)); transform: translateX(-50%); z-index: 7;
   max-width: calc(100% - 32px); padding: 6px 14px; border-radius: 999px; background: rgba(0,0,0,.5); color: #f3ece4; font-size: 12px; text-align: center; pointer-events: none; }
+
+/* ---- 記録のハードルを下げる ---- */
+.feeling-chips .chip { font-size: 13px; min-height: 32px; padding: 4px 11px; }
+.voice-panel { display: grid; justify-items: center; gap: 10px; padding: 20px 16px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); text-align: center; }
+.voice-panel.rec { border-color: color-mix(in srgb, var(--danger) 60%, var(--line)); }
+.voice-orb { width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; font-size: 30px;
+  background: var(--surface-2); }
+.voice-panel.rec .voice-orb { background: color-mix(in srgb, var(--danger) 25%, var(--surface-2)); animation: pulse 1.4s ease-in-out infinite; }
+.voice-lead { margin: 0; color: var(--muted); font-size: 14px; }
+.voice-live { margin: 0; font-size: 18px; line-height: 1.7; min-height: 1.7em; overflow-wrap: anywhere; }
+.voice-panel .btn { min-width: 200px; }
+.feel-date { margin: 0; color: var(--accent); }
+.feel-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.missing-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; margin: 8px 16px 0;
+  padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, var(--surface)); font-size: 13px; }
+.card { cursor: pointer; }
+.card.no-feeling { border-style: dashed; }
+.add-feel { margin-top: 6px; border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--accent); }
+.record-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; gap: 10px; justify-content: center;
+  padding: 12px max(16px, env(safe-area-inset-left, 0px)) calc(12px + var(--safe-bottom));
+  background: linear-gradient(transparent, color-mix(in srgb, var(--bg) 92%, transparent) 35%); }
+.record-bar .voice-btn { flex: 1; max-width: 340px; font-size: 18px; min-height: 58px; border-radius: 999px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.record-bar .photo-btn { flex: none; min-height: 58px; border-radius: 999px; }

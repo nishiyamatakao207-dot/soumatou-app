@@ -6,13 +6,27 @@ import { TagPicker } from '../components/TagPicker';
 import { importFile } from '../lib/media';
 import { VoiceText } from '../components/VoiceText';
 import { toLocalInput } from '../lib/format';
+import { FeelingChips, appendWord } from '../components/FeelingChips';
+import { useSetting } from '../lib/settings';
+import { startVoice, stopVoice, useVoiceSession, voiceSupported } from '../lib/voiceSession';
 
 
-export function Editor({ id }: { id?: string }) {
+const joinSpeech = (t: string, chunk: string) => (t ? `${t}${/[。！？\s]$/.test(t) ? '' : '。'}` : '') + chunk.trim();
+
+/**
+ * 記録の作成・編集。
+ * voice：一覧の「声で残す」から来たとき（録音はもう始まっている）
+ */
+export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
+  const [lastTags, setLastTags] = useSetting('lastTags');
   const [memory, setMemory] = useState<Memory>();
   const [media, setMedia] = useState<MediaDraft[]>([]);
   const [text, setText] = useState('');
-  const [tags, setTags] = useState<string[]>([]);
+  // 新しい記録では、前回使ったタグを最初から選んでおく
+  const [tags, setTags] = useState<string[]>(() => (id ? [] : lastTags));
+  const presetTags = !id && lastTags.length > 0;
+  // 「声で残す」：一覧のボタンで始めた録音の言葉を、気持ちの欄に入れていく
+  const vs = useVoiceSession((chunk) => voice && setText((t) => joinSpeech(t, chunk)));
   const [date, setDate] = useState(() => Date.now());
   /** 日付を自分で変えたら、写真の撮影日で上書きしない */
   const [dateTouched, setDateTouched] = useState(false);
@@ -97,6 +111,7 @@ export function Editor({ id }: { id?: string }) {
       ? { ...memory, text: text.trim(), tags, date }
       : { id: newId(), text: text.trim(), tags, date, mediaIds: [], createdAt: now, updatedAt: now };
     try {
+      setLastTags(tags);
       await saveMemory(
         m,
         media.map((x) => ({
@@ -142,13 +157,43 @@ export function Editor({ id }: { id?: string }) {
         <button className="btn ghost" onClick={() => history.back()}>
           キャンセル
         </button>
-        <h1 className="title">{memory ? '思い出を編集' : '思い出を記録'}</h1>
+        <h1 className="title">{memory ? '思い出を編集' : voice ? '声で残す' : '思い出を記録'}</h1>
         <button className="btn primary" disabled={!canSave} onClick={save}>
           保存
         </button>
       </header>
 
       <main className="form">
+        {voice && (
+          <section className={`voice-panel ${vs.listening ? 'rec' : ''}`} aria-live="polite">
+            <div className="voice-orb" aria-hidden="true">🎙</div>
+            {vs.listening ? (
+              <>
+                <p className="voice-lead">聞いています。どうぞ話してください</p>
+                <p className="voice-live">
+                  {text}
+                  <span className="muted">{vs.interim}</span>
+                </p>
+                <button type="button" className="btn big" onClick={stopVoice}>
+                  ■ 話し終わった
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="voice-lead">
+                  {text ? '文字にしました。写真・動画はこのあと選べます。' : vs.error ? '' : '話した言葉がここに文字で出ます'}
+                </p>
+                {text && <p className="voice-live">{text}</p>}
+                {voiceSupported() && (
+                  <button type="button" className="btn big" onClick={() => startVoice()}>
+                    🎙 {text ? '続けて話す' : '話す'}
+                  </button>
+                )}
+              </>
+            )}
+            {vs.error && <p className="error small">{vs.error}</p>}
+          </section>
+        )}
         <section>
           <h2 className="label">写真・動画</h2>
           <div className="media-list">
@@ -193,7 +238,7 @@ export function Editor({ id }: { id?: string }) {
                     rows={3}
                     value={m.caption ?? ''}
                     onChange={(v) => setMedia((l) => l.map((x) => (x.id === m.id ? { ...x, caption: v } : x)))}
-                    placeholder="この写真のコメント（その時の思い）"
+                    placeholder="一言でOK（例：うれしかった！）"
                   />
                 </div>
               </div>
@@ -219,8 +264,9 @@ export function Editor({ id }: { id?: string }) {
         </section>
 
         <section>
-          <h2 className="label">この思い出のひとこと（なくてもOK）</h2>
-          <VoiceText value={text} onChange={setText} rows={3} placeholder="思い出全体について。写真がない記録はここに書きます" />
+          <h2 className="label">その時の気持ち</h2>
+          <VoiceText value={text} onChange={setText} rows={3} placeholder="一言でOK。写真だけ先に保存して、あとから足すこともできます" />
+          <FeelingChips onPick={(w) => setText((t) => appendWord(t, w))} />
         </section>
 
         <section>
@@ -246,6 +292,7 @@ export function Editor({ id }: { id?: string }) {
 
         <section>
           <h2 className="label">タグ</h2>
+          {presetTags && tags.length > 0 && <p className="muted small">前回のタグを選んでいます。タップで外せます。</p>}
           <TagPicker value={tags} onChange={setTags} known={knownTags} />
         </section>
 
