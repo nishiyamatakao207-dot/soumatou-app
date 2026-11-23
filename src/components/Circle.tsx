@@ -1,12 +1,26 @@
 import { useEffect, useRef } from 'react';
-import { drawCover, featherMask } from '../lib/circleDraw';
+import { drawShaped, type PhotoShape } from '../lib/shape';
 
 /* 写真・動画を丸く切り抜き、ふちを外へ向かってふんわり透明にする。
  * ブラウザのマスク機能は機種差があるため、キャンバスに自分で描く。 */
 
 const pixelSize = (d: number) => Math.round(d * Math.min(2, window.devicePixelRatio || 1));
 
-export function CircleImage({ src, diameter, onLoad }: { src: string; diameter: number; onLoad?: (img: HTMLImageElement) => void }) {
+export function CircleImage({
+  src,
+  diameter,
+  shape = 'circle',
+  shapeKey = '',
+  onLoad,
+}: {
+  src: string;
+  diameter: number;
+  /** 写真の形（設定で選んだもの） */
+  shape?: PhotoShape;
+  /** 写真ごとの値（ポラロイド風の傾き） */
+  shapeKey?: string;
+  onLoad?: (img: HTMLImageElement) => void;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
   const onLoadRef = useRef(onLoad);
   onLoadRef.current = onLoad;
@@ -19,15 +33,14 @@ export function CircleImage({ src, diameter, onLoad }: { src: string; diameter: 
       if (cancelled || !c || !ctx || !img.naturalWidth) return;
       const size = pixelSize(diameter);
       c.width = c.height = size;
-      drawCover(ctx, img, img.naturalWidth, img.naturalHeight, size);
-      featherMask(ctx, size);
+      drawShaped(ctx, img, img.naturalWidth, img.naturalHeight, size, shape, shapeKey);
       onLoadRef.current?.(img);
     };
     img.src = src;
     return () => {
       cancelled = true;
     };
-  }, [src, diameter]);
+  }, [src, diameter, shape, shapeKey]);
   return <canvas ref={ref} className="circle" style={{ width: diameter, height: diameter }} />;
 }
 
@@ -37,6 +50,8 @@ export function CircleImage({ src, diameter, onLoad }: { src: string; diameter: 
 export function CircleVideo({
   src,
   diameter,
+  shape = 'circle',
+  shapeKey = '',
   playing,
   muted,
   onDuration,
@@ -44,6 +59,8 @@ export function CircleVideo({
 }: {
   src: string;
   diameter: number;
+  shape?: PhotoShape;
+  shapeKey?: string;
   playing: boolean;
   muted: boolean;
   onDuration?: (sec: number) => void;
@@ -65,8 +82,7 @@ export function CircleVideo({
     const draw = () => {
       if (stop) return;
       if (v.videoWidth) {
-        drawCover(ctx, v, v.videoWidth, v.videoHeight, size);
-        featherMask(ctx, size);
+        drawShaped(ctx, v, v.videoWidth, v.videoHeight, size, shape, shapeKey);
       }
       schedule();
     };
@@ -83,7 +99,7 @@ export function CircleVideo({
       if (vv.cancelVideoFrameCallback) vv.cancelVideoFrameCallback(handle);
       else cancelAnimationFrame(handle);
     };
-  }, [diameter, src]);
+  }, [diameter, src, shape, shapeKey]);
 
   useEffect(() => {
     const v = videoRef.current;

@@ -1,6 +1,6 @@
 import { ArrayBufferTarget, Muxer } from 'mp4-muxer';
 import { loadFile, thumbKey } from '../data/repository';
-import { drawCover, featherMask } from './circleDraw';
+import { CAPTION_TOP, drawShaped, type PhotoShape } from './shape';
 import { formatDot } from './format';
 import {
   BG_FADE_MS,
@@ -61,6 +61,8 @@ export interface ExportOptions {
   slides: Slide[];
   showDate: boolean;
   bgm: BgmChoice;
+  /** 写真の形（設定で選んだもの） */
+  shape: PhotoShape;
   /**
    * 実時間で録画するときに使う音の出口。iPhone ではボタンを押したその場で作る必要があるので、
    * 画面側で createExportAudioContext() を呼んで渡す。
@@ -270,7 +272,7 @@ function renderBackground(photo: CanvasImageSource | undefined, pw: number, ph: 
   return c;
 }
 
-async function prepare(slide: Slide): Promise<Prepared> {
+async function prepare(slide: Slide, shape: PhotoShape): Promise<Prepared> {
   const placement = place(slide.key, LW, LH);
   const px = Math.round(placement.d * SCALE);
   const media = slide.media;
@@ -284,8 +286,7 @@ async function prepare(slide: Slide): Promise<Prepared> {
       const palette = extractPalette(img);
       const circle = canvas(px, px);
       const cctx = circle.getContext('2d')!;
-      drawCover(cctx, img, w, h, px);
-      featherMask(cctx, px);
+      drawShaped(cctx, img, w, h, px, shape, slide.key);
       const bg = renderBackground(img, w, h, palette, seasonOf(slide.date));
       if ('close' in img) img.close();
       return { placement, palette, bg, circle, missing: false, dispose: () => {} };
@@ -539,6 +540,7 @@ class Renderer {
   constructor(
     private slides: Slide[],
     private showDate: boolean,
+    readonly shape: PhotoShape = 'circle',
   ) {
     this.timing = schedule(slides, new Map());
   }
@@ -559,7 +561,7 @@ class Renderer {
   need(i: number): Promise<Prepared> {
     let p = this.prepared.get(i);
     if (!p) {
-      p = prepare(this.slides[i]).then((r) => {
+      p = prepare(this.slides[i], this.shape).then((r) => {
         this.ready.set(i, r);
         return r;
       });
@@ -803,8 +805,7 @@ class Renderer {
       await seek(p.video, (mediaClock - start[i]) / 1000);
       const vc = p.videoCanvas;
       const vctx = vc.getContext('2d')!;
-      drawCover(vctx, p.video, p.video.videoWidth, p.video.videoHeight, vc.width);
-      featherMask(vctx, vc.width);
+      drawShaped(vctx, p.video, p.video.videoWidth, p.video.videoHeight, vc.width, this.shape, slide.key);
       ctx.drawImage(vc, pl.x, pl.y, pl.d, pl.d);
     } else {
       this.drawTextCircle(pl, p.missing ? '画像が見つかりません' : slide.memory.text);
@@ -818,7 +819,7 @@ class Renderer {
         ctx.globalAlpha = opacity * k;
         const left = pl.x + pl.commentLeft;
         const centerX = left + pl.commentWidth / 2;
-        let y = pl.y + pl.d * 0.92 - 6 + (1 - k) * 8;
+        let y = pl.y + pl.d * CAPTION_TOP[this.shape] - 6 + (1 - k) * 8;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         if (this.showDate) {
@@ -922,8 +923,8 @@ export async function exportMethod(withSound: boolean): Promise<'fast' | 'realti
   return 'none';
 }
 
-export async function exportMovie({ slides, showDate, bgm, audioCtx, onProgress, signal }: ExportOptions): Promise<ExportResult> {
-  const r = new Renderer(slides, showDate);
+export async function exportMovie({ slides, showDate, bgm, shape, audioCtx, onProgress, signal }: ExportOptions): Promise<ExportResult> {
+  const r = new Renderer(slides, showDate, shape);
   try {
     await r.measureVideos();
     const sound = await buildSoundtrack(slides, r.timing, bgm);

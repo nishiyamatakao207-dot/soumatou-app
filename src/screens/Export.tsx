@@ -6,6 +6,7 @@ import { useSetting } from '../lib/settings';
 import type { ExportProgress, ExportResult } from '../lib/exporter';
 import { BgmPicker } from '../components/BgmPicker';
 import { createExportAudioContext } from '../lib/bgm';
+import { SHAPE_OPTIONS } from '../lib/shape';
 
 /* 思い出ムービーを動画ファイルにして、LINE などに共有する画面。
  * 書き出しの部品は大きいので、この画面を開いたときに初めて読み込む。 */
@@ -23,6 +24,7 @@ export function Export({ query }: { query: string }) {
   const [method, setMethod] = useState<'fast' | 'realtime' | 'none'>();
   const [showDate, setShowDate] = useSetting('showDate');
   const [bgm] = useSetting('bgm');
+  const [shape] = useSetting('photoShape');
   const [phase, setPhase] = useState<Phase>({ kind: 'ready' });
   const [notice, setNotice] = useState<string>();
   const abort = useRef<AbortController | null>(null);
@@ -75,6 +77,7 @@ export function Export({ query }: { query: string }) {
         slides,
         showDate,
         bgm,
+        shape,
         audioCtx,
         signal: ctrl.signal,
         onProgress: (progress) => setPhase({ kind: 'working', progress }),
@@ -137,6 +140,7 @@ export function Export({ query }: { query: string }) {
           <p className="export-what">{describeFilter(filter)}</p>
           <p className="muted small">
             写真・動画 {slides ? count : '…'}枚 ・ 長さ {estimate == null ? '計算中…' : `約${mmss(estimate)}`}（動画の長さにより変わります）・ 縦長 720×1280
+            ・ 写真の形：{SHAPE_OPTIONS.find((o) => o.value === shape)?.label}（設定で変えられます）
           </p>
         </section>
 

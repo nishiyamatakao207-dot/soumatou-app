@@ -6,6 +6,7 @@ import { useSetting } from '../lib/settings';
 import { pickDigest } from '../lib/digest';
 import { seasonOf, tintCss } from '../lib/season';
 import { SeasonParticles } from '../components/SeasonParticles';
+import { CAPTION_TOP, type PhotoShape } from '../lib/shape';
 import { navigate } from '../router';
 import { useStoredUrl } from '../lib/useStoredUrl';
 import { DEFAULT_PALETTE, extractPalette, type Palette } from '../lib/palette';
@@ -62,6 +63,7 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
   const { vw, vh } = useViewport();
   const [showDate, setShowDate] = useSetting('showDate');
   const [bgmChoice] = useSetting('bgm');
+  const [shape] = useSetting('photoShape');
   const bgm = useRef<BgmPlayer | null>(null);
   /** BGM の状態（画面の下に小さく出す） */
   const [bgmStatus, setBgmStatus] = useState<string>();
@@ -329,7 +331,7 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
         )}
 
         {prev !== null && slides[prev] && (
-          <SlideView key={slides[prev].key} slide={slides[prev]} index={prev} vw={vw} vh={vh} leaving playing={false} muted showDate={showDate} ago={!!filter.day} />
+          <SlideView key={slides[prev].key} slide={slides[prev]} index={prev} vw={vw} vh={vh} leaving playing={false} muted showDate={showDate} ago={!!filter.day} shape={shape} />
         )}
         <SlideView
           key={current.key}
@@ -342,6 +344,7 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
           muted={muted}
           showDate={showDate}
           ago={!!filter.day}
+          shape={shape}
           onImage={onPalette}
           onVideoDuration={onVideoDuration}
           onVideoEnded={onVideoEnded}
@@ -430,6 +433,7 @@ function SlideView({
   muted,
   showDate,
   ago,
+  shape,
   onImage,
   onVideoDuration,
   onVideoEnded,
@@ -444,6 +448,8 @@ function SlideView({
   showDate: boolean;
   /** ◯年前の今日：日付の横に「◯年前」を出す */
   ago?: boolean;
+  /** 写真の形 */
+  shape: PhotoShape;
   onImage?: (key: string, img: HTMLImageElement) => void;
   onVideoDuration?: (i: number, sec: number) => void;
   onVideoEnded?: (i: number) => void;
@@ -473,12 +479,14 @@ function SlideView({
             </div>
           )}
           {!lost && media?.kind === 'photo' && url && (
-            <CircleImage src={url} diameter={p.d} onLoad={(img) => onImage?.(slide.key, img)} />
+            <CircleImage src={url} diameter={p.d} shape={shape} shapeKey={slide.key} onLoad={(img) => onImage?.(slide.key, img)} />
           )}
           {!lost && media?.kind === 'video' && url && (
             <CircleVideo
               src={url}
               diameter={p.d}
+              shape={shape}
+              shapeKey={slide.key}
               playing={playing}
               muted={muted}
               onDuration={(s) => onVideoDuration?.(index, s)}
@@ -487,7 +495,7 @@ function SlideView({
           )}
         </div>
         {((slide.comment && media) || showDate) && (
-          <div className="slide-caption" style={{ left: p.commentLeft, width: p.commentWidth, top: p.d * 0.92 - 6 }}>
+          <div className="slide-caption" style={{ left: p.commentLeft, width: p.commentWidth, top: p.d * CAPTION_TOP[shape] - 6 }}>
             {showDate && (
               <p className="slide-date">
                 {formatDot(slide.date)}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { BgmPicker } from '../components/BgmPicker';
+import { ShapePicker } from '../components/ShapePicker';
 import { digestAvailable } from '../lib/digest';
 import { useSetting } from '../lib/settings';
 import { navigate } from '../router';
@@ -57,6 +58,9 @@ export function Settings() {
             </span>
             <input type="checkbox" className="toggle" checked={showDate} onChange={(e) => setShowDate(e.target.checked)} />
           </label>
+        </section>
+        <section className="setting">
+          <ShapePicker />
         </section>
         <section className="setting">
           <BgmPicker />
