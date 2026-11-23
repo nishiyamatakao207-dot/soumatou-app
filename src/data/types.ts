@@ -10,6 +10,12 @@ export interface Memory {
   mediaIds: string[];
   createdAt: number;
   updatedAt: number;
+  /** 未来への手紙：この日時（その日の0時）まで中身を見られない */
+  sealedUntil?: number;
+  /** 未来への手紙：宛名（例：20歳の〇〇へ） */
+  letterTo?: string;
+  /** 未来への手紙：開けた日時（開けたあとは普通の記録になる） */
+  openedAt?: number;
 }
 
 export type MediaKind = 'photo' | 'video';
@@ -66,4 +72,6 @@ export interface MemoryFilter {
   to?: number;
   /** この月日（'MM-DD'）だけ。年はどれでもよい（◯年前の今日） */
   monthDays?: string[];
+  /** この記録だけ（開けた手紙を流すとき） */
+  memoryId?: string;
 }

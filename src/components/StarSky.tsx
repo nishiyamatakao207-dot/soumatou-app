@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { listDatedItems } from '../data/repository';
+import { isReady, listDatedItems, listLetters } from '../data/repository';
 import { formatDate } from '../lib/format';
 import { seeded } from '../lib/movie';
 import { SEASON_LABEL, seasonOf, tintCss } from '../lib/season';
@@ -17,6 +17,8 @@ const MILESTONES = [10, 30, 50, 100, 200, 365, 500, 1000];
 const TWINKLE_MAX = 80;
 
 interface Star {
+  /** 未来への手紙（まだ光らない星）：封をしている／開けられる */
+  letter?: 'sealed' | 'ready';
   id: string;
   date: number;
   createdAt: number;
@@ -49,6 +51,7 @@ function writeSeen(v: number) {
 
 export function StarSky() {
   const [raw, setRaw] = useState<Omit<Star, 'x' | 'y' | 'size' | 'year' | 'twinkle' | 'tw' | 'delay'>[]>();
+  const [letterCount, setLetterCount] = useState(0);
   const [born, setBorn] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string>();
   const season = seasonOf(Date.now());
@@ -64,8 +67,15 @@ export function StarSky() {
         if (it.media?.caption?.trim()) s.feeling = true;
         map.set(m.id, s);
       }
+      // 封をした手紙は「まだ光らない星」として並べる
+      const letters = await listLetters();
+      setLetterCount(letters.length);
+      const withLetters = [
+        ...map.values(),
+        ...letters.map((m) => ({ id: m.id, date: m.date, createdAt: m.createdAt, photos: 0, feeling: false, letter: isReady(m) ? ('ready' as const) : ('sealed' as const) })),
+      ].sort((a, b) => a.date - b.date);
       const list = [...map.values()].sort((a, b) => a.date - b.date);
-      setRaw(list);
+      setRaw(withLetters);
 
       // 前回見たときより後に作られた記録は「新しい星」
       const seen = readSeen();
@@ -143,7 +153,7 @@ export function StarSky() {
         return (
           <button
             key={s.id}
-            className={`star ${s.feeling ? 'bright' : ''} ${s.twinkle ? 'twinkle' : ''} ${order >= 0 ? 'born' : ''}`}
+            className={`star ${s.feeling ? 'bright' : ''} ${s.twinkle && !s.letter ? 'twinkle' : ''} ${order >= 0 && !s.letter ? 'born' : ''} ${s.letter ? `letter ${s.letter}` : ''}`}
             style={
               {
                 left: `${s.x}%`,
@@ -153,8 +163,8 @@ export function StarSky() {
                 ['--d' as string]: `${(order >= 0 ? 0.6 + order * 0.45 : s.delay).toFixed(2)}s`,
               } as React.CSSProperties
             }
-            onClick={() => navigate(`/edit/${encodeURIComponent(s.id)}`)}
-            aria-label={`${formatDate(s.date)}の思い出を開く`}
+            onClick={() => navigate(s.letter ? `/letter/${encodeURIComponent(s.id)}` : `/edit/${encodeURIComponent(s.id)}`)}
+            aria-label={s.letter ? '未来への手紙' : `${formatDate(s.date)}の思い出を開く`}
           >
             {order >= 0 && <span className="meteor" />}
             <span className="star-core" />
@@ -165,7 +175,11 @@ export function StarSky() {
         {SEASON_LABEL[season]}の夜空
       </div>
       <div className="sky-count">
-        {raw && raw.length === 0 ? '思い出を残すと、ここに星がひとつ灯ります' : raw ? `✦ ${raw.length}の思い出が星になりました` : ''}
+        {raw && raw.length === 0
+          ? '思い出を残すと、ここに星がひとつ灯ります'
+          : raw
+            ? `✦ ${raw.length - letterCount}の思い出が星になりました${letterCount ? `　✉ 光るのを待つ手紙 ${letterCount}通` : ''}`
+            : ''}
       </div>
       {toast && <div className="sky-toast">{toast}</div>}
     </section>

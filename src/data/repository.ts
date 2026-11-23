@@ -6,6 +6,24 @@ export const newId = () =>
 
 export const thumbKey = (id: string) => `${id}:thumb`;
 
+/** 未来への手紙で、まだ開けていない（中身を隠す）記録か */
+export const isSealed = (m: Memory) => !!m.sealedUntil && !m.openedAt;
+/** 手紙を開けられる日が来たか */
+export const isReady = (m: Memory, now = Date.now()) => isSealed(m) && now >= (m.sealedUntil ?? Infinity);
+
+/** まだ開けていない手紙（開けられる日が近い順） */
+export async function listLetters(): Promise<Memory[]> {
+  return (await db.memories.toArray()).filter(isSealed).sort((a, b) => a.sealedUntil! - b.sealedUntil!);
+}
+
+/** 手紙を開ける（開けられる日が来ているときだけ） */
+export async function openLetter(id: string): Promise<boolean> {
+  const m = await db.memories.get(id);
+  if (!m || !isReady(m)) return false;
+  await db.memories.update(id, { openedAt: Date.now() });
+  return true;
+}
+
 export async function listMemories(filter?: MemoryFilter): Promise<Memory[]> {
   let all = await db.memories.orderBy('date').toArray();
   if (filter) {
@@ -64,7 +82,10 @@ export interface DatedItem {
  * 同じ日時のときは、記録の中での並び順を保つ。
  */
 export async function listDatedItems(filter?: MemoryFilter): Promise<DatedItem[]> {
-  const memories = await listMemories(filter ? { tags: filter.tags } : undefined);
+  // 封をした手紙は、日付が来て開けるまで、再生・一覧・ひとめぐりなどに出さない
+  const memories = (await listMemories(filter ? { tags: filter.tags } : undefined)).filter(
+    (m) => !isSealed(m) && (!filter?.memoryId || m.id === filter.memoryId),
+  );
   const items: (DatedItem & { order: number })[] = [];
   let order = 0;
   for (const m of memories) {

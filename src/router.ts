@@ -11,6 +11,7 @@ export type Route =
   | { name: 'play'; query: string }
   | { name: 'export'; query: string }
   | { name: 'digest' }
+  | { name: 'letter'; id: string }
   | { name: 'settings' };
 
 export function parseRoute(hash: string): Route {
@@ -22,6 +23,7 @@ export function parseRoute(hash: string): Route {
   if (seg[0] === 'play') return { name: 'play', query };
   if (seg[0] === 'export') return { name: 'export', query };
   if (seg[0] === 'digest') return { name: 'digest' };
+  if (seg[0] === 'letter' && seg[1]) return { name: 'letter', id: decodeURIComponent(seg[1]) };
   if (seg[0] === 'settings') return { name: 'settings' };
   return { name: 'timeline', query };
 }

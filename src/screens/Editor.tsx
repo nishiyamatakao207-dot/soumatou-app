@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { deleteMemory, getMediaFor, getMemory, listTags, newId, saveMemory } from '../data/repository';
+import { deleteMemory, getMediaFor, getMemory, isSealed, listTags, newId, saveMemory } from '../data/repository';
+import { dayStart, tomorrow, yearsLater } from '../lib/letter';
+import { navigate } from '../router';
 import type { DateSource, MediaDraft, Memory } from '../data/types';
 import { Thumb } from '../components/Thumb';
 import { TagPicker } from '../components/TagPicker';
@@ -34,6 +36,11 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 未来への手紙
+  const [isLetter, setIsLetter] = useState(false);
+  const [letterTo, setLetterTo] = useState('');
+  const [openOn, setOpenOn] = useState(() => yearsLater(1));
+  const [confirmSeal, setConfirmSeal] = useState(false);
   const cameraRef = useRef<HTMLInputElement>(null);
   const libraryRef = useRef<HTMLInputElement>(null);
   const replaceRef = useRef<HTMLInputElement>(null);
@@ -46,6 +53,8 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
     (async () => {
       const m = await getMemory(id);
       if (!m) return history.back();
+      // 封をした手紙は、日付が来るまで中身を見せない（封筒の画面へ）
+      if (isSealed(m)) return navigate(`/letter/${encodeURIComponent(m.id)}`, true);
       setMemory(m);
       setText(m.text);
       setTags(m.tags);
@@ -107,9 +116,10 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
   async function save() {
     setBusy(true);
     const now = Date.now();
-    const m: Memory = memory
+    const base: Memory = memory
       ? { ...memory, text: text.trim(), tags, date }
       : { id: newId(), text: text.trim(), tags, date, mediaIds: [], createdAt: now, updatedAt: now };
+    const m: Memory = isLetter ? { ...base, sealedUntil: dayStart(openOn), letterTo: letterTo.trim() || undefined, openedAt: undefined } : base;
     try {
       setLastTags(tags);
       await saveMemory(
@@ -150,6 +160,8 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
     });
 
   const canSave = !busy && (media.length > 0 || text.trim().length > 0);
+  const letterOk = !!openOn && dayStart(openOn) > Date.now();
+  const [oy, om, od] = openOn ? openOn.split('-').map(Number) : [0, 0, 0];
 
   return (
     <div className="screen">
@@ -158,10 +170,39 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
           キャンセル
         </button>
         <h1 className="title">{memory ? '思い出を編集' : voice ? '声で残す' : '思い出を記録'}</h1>
-        <button className="btn primary" disabled={!canSave} onClick={save}>
+        <button className="btn primary" disabled={!canSave || (isLetter && !letterOk)} onClick={() => (isLetter ? setConfirmSeal(true) : save())}>
           保存
         </button>
       </header>
+
+      {confirmSeal && (
+        <div className="otd-modal" role="dialog" aria-modal="true" aria-label="封をする">
+          <div className="otd-sheet">
+            <p className="otd-kicker">未来への手紙</p>
+            <h2 className="otd-title" style={{ fontSize: 20 }}>封をしますか？</h2>
+            <p className="small">
+              {oy}年{om}月{od}日 まで、あなたも含めて誰も中身を見られません。
+              <br />
+              その日が来たら、アプリを開いたときにお知らせします。
+            </p>
+            <p className="muted small">
+              手紙はこの端末の中だけに保存されます。機種変更や初期化で消えないよう、バックアップをおすすめします。
+            </p>
+            <button
+              className="btn primary big"
+              onClick={() => {
+                setConfirmSeal(false);
+                void save();
+              }}
+            >
+              ✉ 封をする
+            </button>
+            <button className="btn ghost" onClick={() => setConfirmSeal(false)}>
+              もう少し書く
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="form">
         {voice && (
@@ -295,6 +336,38 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
           {presetTags && tags.length > 0 && <p className="muted small">前回のタグを選んでいます。タップで外せます。</p>}
           <TagPicker value={tags} onChange={setTags} known={knownTags} />
         </section>
+
+        {(!memory || !memory.openedAt) && (
+          <section className={`letter-option ${isLetter ? 'on' : ''}`}>
+            <label className="setting-row">
+              <span>
+                <strong>✉ 未来への手紙にする</strong>
+                <small>決めた日が来るまで、中身（写真・言葉）を見られなくします。例：子どもが20歳になる日に開く手紙</small>
+              </span>
+              <input type="checkbox" className="toggle" checked={isLetter} onChange={(e) => setIsLetter(e.target.checked)} />
+            </label>
+            {isLetter && (
+              <div className="letter-fields">
+                <label className="field">
+                  <span className="label">宛名</span>
+                  <input value={letterTo} onChange={(e) => setLetterTo(e.target.value)} placeholder="例：20歳の〇〇へ" maxLength={40} />
+                </label>
+                <div className="field">
+                  <span className="label">開けられる日</span>
+                  <div className="chips">
+                    {[1, 3, 10, 20].map((n) => (
+                      <button key={n} type="button" className={`chip ${openOn === yearsLater(n) ? 'on' : ''}`} onClick={() => setOpenOn(yearsLater(n))}>
+                        {n}年後
+                      </button>
+                    ))}
+                  </div>
+                  <input type="date" value={openOn} min={tomorrow()} onChange={(e) => setOpenOn(e.target.value)} />
+                  {!letterOk && <p className="error small">明日以降の日付を選んでください</p>}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
 
         {notice && <p className="error">{notice}</p>}
 

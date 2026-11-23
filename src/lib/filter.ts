@@ -19,6 +19,8 @@ export interface FilterState {
   to?: string;
   /** ◯年前の今日：'MM-DD'（その月日の、去年より前の記録） */
   day?: string;
+  /** この記録だけ（未来への手紙を開けたあとに流す） */
+  memory?: string;
 }
 
 /** 2/29 の記録は、うるう年でない年は 2/28 に出す */
@@ -31,6 +33,7 @@ export const EMPTY_FILTER: FilterState = { tags: [], period: 'all' };
 
 export function toMemoryFilter(f: FilterState): MemoryFilter {
   const y = new Date().getFullYear();
+  if (f.memory) return { tags: [], memoryId: f.memory };
   if (f.day) {
     // 今日より前（＝去年以前）の、同じ月日の記録
     const today = new Date();
@@ -61,6 +64,7 @@ export function filterToQuery(f: FilterState): string {
   if (f.from) q.set('from', f.from);
   if (f.to) q.set('to', f.to);
   if (f.day) q.set('day', f.day);
+  if (f.memory) q.set('memory', f.memory);
   return q.toString();
 }
 
@@ -72,10 +76,12 @@ export function filterFromQuery(s: string): FilterState {
     from: q.get('from') ?? undefined,
     to: q.get('to') ?? undefined,
     day: q.get('day') ?? undefined,
+    memory: q.get('memory') ?? undefined,
   };
 }
 
 export function describeFilter(f: FilterState): string {
+  if (f.memory) return '未来への手紙';
   if (f.day) {
     const [m, d] = f.day.split('-').map(Number);
     return `◯年前の今日（${m}月${d}日）`;

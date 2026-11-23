@@ -401,3 +401,64 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .otd-title { margin: 0; font-size: 24px; letter-spacing: .1em; color: var(--accent); font-weight: 600; }
 .otd-sheet .otd-thumbs .thumb { width: 72px; }
 .otd-sheet .btn.big { width: 100%; }
+
+/* ---- 未来への手紙 ---- */
+.envelope { --w: 240px; position: relative; width: var(--w); height: calc(var(--w) * .66); perspective: 800px; flex: none; }
+.envelope.small { --w: 64px; }
+.env-body { position: absolute; inset: 0; border-radius: 8px; z-index: 2; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 12%;
+  background: linear-gradient(160deg, #f4e7cf, #e2cda7); box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  /* 封筒の前側（左右と下から三角に合わさる形） */
+  clip-path: polygon(0 0, 50% 52%, 100% 0, 100% 100%, 0 100%); }
+.env-to { font-size: 15px; color: #6b4b2a; letter-spacing: .08em; font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif; max-width: 80%; text-align: center; }
+.env-flap { position: absolute; left: 0; right: 0; top: 0; height: 58%; z-index: 3; transform-origin: top center;
+  background: linear-gradient(180deg, #e9d6b4, #d8bf95); clip-path: polygon(0 0, 100% 0, 50% 100%); transition: transform .9s cubic-bezier(.4,0,.2,1), z-index 0s .45s; }
+.env-seal { position: absolute; left: 50%; top: 46%; z-index: 4; width: 22%; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%;
+  display: grid; place-items: center; font-size: calc(var(--w) * .09); color: #f7d7c4; font-weight: 700;
+  background: radial-gradient(circle at 35% 30%, #c4503f, #8e2a22 70%); box-shadow: 0 2px 6px rgba(0,0,0,.35), inset 0 0 0 2px rgba(255,255,255,.12);
+  transition: opacity .4s ease; }
+.env-paper { position: absolute; left: 7%; right: 7%; top: 8%; height: 84%; z-index: 1; border-radius: 4px; background: #fffaf0;
+  transition: transform .9s cubic-bezier(.2,.8,.2,1) .6s; }
+.envelope.small .env-seal { font-size: 9px; }
+.envelope.ready .env-seal { animation: sealGlow 1.8s ease-in-out infinite alternate; }
+@keyframes sealGlow { from { box-shadow: 0 0 0 rgba(255,200,120,0); } to { box-shadow: 0 0 22px rgba(255,205,130,.9); } }
+.envelope.open .env-flap { transform: rotateX(180deg); z-index: 0; }
+.envelope.open .env-seal { opacity: 0; }
+.envelope.open .env-paper { transform: translateY(-55%); }
+.letter-option { padding: 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
+.letter-option.on { border-color: color-mix(in srgb, #c4503f 55%, var(--line)); background: linear-gradient(160deg, color-mix(in srgb, #e2cda7 9%, var(--surface)), var(--surface)); }
+.letter-fields { display: grid; gap: 14px; margin-top: 14px; }
+.field { display: grid; gap: 8px; }
+.field input { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.letter-screen { background: radial-gradient(ellipse 90% 60% at 50% 0%, #2a1f18, var(--bg) 70%); }
+.letter-screen.center { display: grid; place-items: center; gap: 12px; text-align: center; }
+.letter-main { display: grid; justify-items: center; gap: 18px; padding: 28px max(16px, env(safe-area-inset-left, 0px)) 40px; max-width: 520px; margin: 0 auto; text-align: center; }
+.letter-kicker { margin: 0; letter-spacing: .3em; font-size: 13px; color: var(--accent); }
+.letter-when { margin: 0; display: grid; gap: 4px; font-size: 15px; }
+.letter-when strong { font-size: 26px; letter-spacing: .06em; color: #f3e2c4; font-weight: 600; }
+.letter-throw { margin-top: 16px; width: 100%; }
+.letter-paper { width: 100%; display: grid; gap: 16px; padding: 26px 20px; text-align: left; border-radius: 10px; color: #3d2a17;
+  background: linear-gradient(#fffaf0, #f6ecd9); box-shadow: 0 16px 40px rgba(0,0,0,.4); animation: paperIn 1s cubic-bezier(.2,.8,.2,1) both;
+  font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif; }
+@keyframes paperIn { from { opacity: 0; transform: translateY(30px) scale(.96); } to { opacity: 1; transform: none; } }
+.letter-to { margin: 0; font-size: 18px; letter-spacing: .08em; }
+.letter-text { margin: 0; font-size: 17px; line-height: 2; white-space: pre-wrap; }
+.letter-photos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.letter-photo p { margin: 4px 0 0; font-size: 13px; line-height: 1.6; }
+.letter-sign { margin: 0; text-align: right; font-size: 13px; color: #7a5a3a; }
+.letter-paper .btn { font-family: inherit; }
+
+/* 一覧の「未来への手紙」 */
+.letter-shelf { margin: 12px 16px 0; display: grid; gap: 8px; }
+.letter-shelf h2 { margin: 0; font-size: 13px; color: var(--muted); letter-spacing: .08em; font-weight: 600; }
+.letter-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; text-align: left; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); }
+.letter-row.ready { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.letter-row-text { display: grid; gap: 2px; min-width: 0; }
+.letter-row-text strong { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.letter-row-text span { font-size: 12px; color: var(--muted); }
+.letter-row.ready .letter-row-text span { color: var(--accent); }
+/* 未来への手紙の星：まだ光らない（輪だけ）。開けられる日が来たら金色に脈打つ */
+.star.letter .star-core { width: 9px; height: 9px; background: transparent; border: 1px dashed rgba(255,230,190,.55); box-shadow: none; }
+.star.letter.ready .star-core { border: 1px solid rgba(255,214,140,.95); background: rgba(255,214,140,.25);
+  animation: letterStar 1.6s ease-in-out infinite alternate; }
+@keyframes letterStar { from { box-shadow: 0 0 2px rgba(255,214,140,.4); } to { box-shadow: 0 0 16px rgba(255,214,140,.95); } }

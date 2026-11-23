@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { filterToQuery } from '../lib/filter';
 import { dismissToday, dismissedToday, findOnThisDay, markShown, shownToday, yearsLabel, type OnThisDay } from '../lib/onThisDay';
 import { useSetting } from '../lib/settings';
+import { readyLettersToAnnounce } from '../lib/letterNotice';
 import { navigate } from '../router';
 import { Thumb } from './Thumb';
 
@@ -22,9 +23,10 @@ export function OnThisDayCard() {
     if (!enabled) return;
     const atLaunch = !launchChecked;
     launchChecked = true;
-    findOnThisDay().then((r) => {
+    // 手紙のお知らせと重ならないよう、先に調べる（手紙が優先）
+    Promise.all([findOnThisDay(), atLaunch ? readyLettersToAnnounce() : Promise.resolve([])]).then(([r, letters]) => {
       setOtd(r);
-      if (r && atLaunch && !shownToday() && !dismissedToday()) {
+      if (r && atLaunch && !letters.length && !shownToday() && !dismissedToday()) {
         setBig(true);
         markShown();
       }
