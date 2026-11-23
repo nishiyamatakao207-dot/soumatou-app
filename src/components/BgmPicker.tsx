@@ -8,6 +8,8 @@ export function BgmPicker({ dark }: { dark?: boolean }) {
   const [bgm, setBgm] = useSetting('bgm');
   const [customName, setCustomName] = useSetting('customBgmName');
   const [previewing, setPreviewing] = useState(false);
+  /** 曲を作っている・読み込んでいる最中 */
+  const [preparing, setPreparing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const player = useRef<BgmPlayer | null>(null);
@@ -17,6 +19,7 @@ export function BgmPicker({ dark }: { dark?: boolean }) {
     player.current?.dispose();
     player.current = null;
     setPreviewing(false);
+    setPreparing(false);
   };
   useEffect(() => stopPreview, []);
   // 選んだ曲を前もって作っておく（初めての曲は少し時間がかかるため）
@@ -54,10 +57,14 @@ export function BgmPicker({ dark }: { dark?: boolean }) {
     p.unlock();
     player.current = p;
     setPreviewing(true);
+    setPreparing(true);
+    setError(undefined);
     void p.play(bgm).then((ok) => {
-      if (!ok && player.current === p) {
+      if (player.current !== p) return;
+      setPreparing(false);
+      if (!ok) {
         stopPreview();
-        setError('曲を読み込めませんでした');
+        setError(`曲を再生できませんでした（${p.lastError || '理由不明'}）`);
       }
     });
   }
@@ -97,6 +104,8 @@ export function BgmPicker({ dark }: { dark?: boolean }) {
         </p>
       )}
       {busy && <p className="bgm-note">読み込み中…</p>}
+      {preparing && <p className="bgm-note">♪ 曲を準備中…（初めての曲は数秒〜十数秒かかります）</p>}
+      {previewing && !preparing && <p className="bgm-note">♪ 再生中（聞こえないときは、音量ボタンで音を上げてください）</p>}
       {error && <p className="error small">{error}</p>}
       <input ref={fileRef} type="file" accept="audio/*" hidden onChange={(e) => (onFile(e.target.files), (e.target.value = ''))} />
     </div>

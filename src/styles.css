@@ -251,3 +251,5 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .bgm-picker.on-dark .chip.on { background: color-mix(in srgb, var(--accent) 22%, transparent); border-color: var(--accent); color: var(--accent); }
 .bgm-picker.on-dark .bgm-note, .bgm-picker.on-dark .bgm-label { color: #cfc4b8; }
 .player.center.intro { overflow-y: auto; justify-content: safe center; padding-top: calc(24px + var(--safe-top)); padding-bottom: calc(24px + var(--safe-bottom)); }
+.bgm-status { position: absolute; left: 50%; bottom: calc(20px + var(--safe-bottom)); transform: translateX(-50%); z-index: 7;
+  max-width: calc(100% - 32px); padding: 6px 14px; border-radius: 999px; background: rgba(0,0,0,.5); color: #f3ece4; font-size: 12px; text-align: center; pointer-events: none; }

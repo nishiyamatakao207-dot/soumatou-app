@@ -30,6 +30,57 @@ export async function bgmBuffer(choice: BgmChoice, ctx: BaseAudioContext): Promi
   return renderLoop(choice, SAMPLE_RATE);
 }
 
+/**
+ * iPhone の消音スイッチ（マナーモード）対策。
+ * アプリが作った音（Web Audio）は消音スイッチで消えてしまうが、
+ * 普通の音声プレーヤー（<audio>）で音を流している間は「音楽の再生」扱いになり、消音スイッチ中でも聞こえる。
+ * そこで、タップしたその場で「無音の音声」をくり返し流しておく。
+ */
+let keepAlive: HTMLAudioElement | null = null;
+let keepAliveUsers = 0;
+
+function silentWavUrl(): string {
+  const rate = 8000;
+  const n = rate / 2; // 0.5秒
+  const v = new DataView(new ArrayBuffer(44 + n * 2));
+  const w = (o: number, s: string) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF');
+  v.setUint32(4, 36 + n * 2, true);
+  w(8, 'WAVEfmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true);
+  v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  w(36, 'data');
+  v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([v.buffer], { type: 'audio/wav' }));
+}
+
+/** タップしたその場で呼ぶ：音が出るように準備する */
+export function unlockAudioOutput() {
+  preferPlaybackAudio();
+  try {
+    if (!keepAlive) {
+      keepAlive = new Audio(silentWavUrl());
+      keepAlive.loop = true;
+      keepAlive.setAttribute('playsinline', '');
+      keepAlive.preload = 'auto';
+    }
+    keepAliveUsers++;
+    void keepAlive.play().catch(() => {});
+  } catch {
+    /* 音声プレーヤーが使えない環境 */
+  }
+}
+
+function releaseAudioOutput() {
+  keepAliveUsers = Math.max(0, keepAliveUsers - 1);
+  if (keepAliveUsers === 0) keepAlive?.pause();
+}
+
 /** iPhone のマナーモード（消音スイッチ）中でも音が出るようにお願いする（対応している iOS のみ） */
 export function preferPlaybackAudio() {
   const s = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
@@ -45,7 +96,7 @@ export function preferPlaybackAudio() {
 /** 動画を実時間で録画するときに、音を流すための AudioContext（ボタンを押したその場で呼ぶ） */
 export function createExportAudioContext(): AudioContext | undefined {
   try {
-    preferPlaybackAudio();
+    unlockAudioOutput();
     const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ctx = new AC({ sampleRate: SAMPLE_RATE });
     void ctx.resume().catch(() => {});
@@ -68,8 +119,11 @@ export class BgmPlayer {
   private ducked = false;
   private stopped = false;
 
+  /** 最後に失敗した理由（画面に出す用） */
+  lastError = '';
+
   constructor() {
-    preferPlaybackAudio();
+    unlockAudioOutput();
     const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     this.ctx = new AC();
     this.gain = this.ctx.createGain();
@@ -85,8 +139,15 @@ export class BgmPlayer {
   async play(choice: BgmChoice): Promise<boolean> {
     this.source?.stop();
     this.source = undefined;
-    const buf = await bgmBuffer(choice, this.ctx).catch(() => null);
+    let buf: AudioBuffer | null = null;
+    try {
+      buf = await bgmBuffer(choice, this.ctx);
+      if (!buf) this.lastError = choice === 'custom' ? '自分の曲が見つかりません' : '曲がありません';
+    } catch (e) {
+      this.lastError = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    }
     if (!buf || this.stopped) return false;
+    if (this.ctx.state !== 'running') await this.ctx.resume().catch(() => {});
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
     src.loop = true;
@@ -133,7 +194,13 @@ export class BgmPlayer {
     this.gain.gain.setValueAtTime(this.gain.gain.value, now);
     this.gain.gain.linearRampToValueAtTime(0, now + sec);
   }
+  /** 音が鳴る状態か（画面に出す用） */
+  get state() {
+    return this.ctx.state;
+  }
+
   dispose() {
+    if (!this.stopped) releaseAudioOutput();
     this.stopped = true;
     try {
       this.source?.stop();

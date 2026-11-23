@@ -54,6 +54,8 @@ export function Player({ query }: { query: string }) {
   const [showDate, setShowDate] = useSetting('showDate');
   const [bgmChoice] = useSetting('bgm');
   const bgm = useRef<BgmPlayer | null>(null);
+  /** BGM の状態（画面の下に小さく出す） */
+  const [bgmStatus, setBgmStatus] = useState<string>();
   const progressRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -246,7 +248,11 @@ export function Player({ query }: { query: string }) {
               const p = new BgmPlayer();
               p.unlock();
               bgm.current = p;
-              void p.play(bgmChoice);
+              setBgmStatus('♪ BGMを準備中…');
+              void p.play(bgmChoice).then((ok) => {
+                if (bgm.current !== p) return;
+                setBgmStatus(ok ? undefined : `BGMを再生できませんでした（${p.lastError || '理由不明'}）`);
+              });
             }
             setStarted(true);
           }}
@@ -316,6 +322,7 @@ export function Player({ query }: { query: string }) {
         />
 
         {paused && !finished && <div className="pause-mark">❚❚</div>}
+        {bgmStatus && <div className="bgm-status">{bgmStatus}</div>}
       </div>
 
       <div className="player-top">

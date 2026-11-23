@@ -314,7 +314,24 @@ async function compose(mood: BgmMood): Promise<AudioBuffer> {
   const L = loopSeconds(mood);
   const frames = Math.ceil(L * MUSIC_RATE);
   const tail = Math.ceil((SONGS[mood].reverbSec + 4) * MUSIC_RATE);
-  const ctx = new OfflineAudioContext(2, frames + tail, MUSIC_RATE);
+  let ctx: OfflineAudioContext;
+  try {
+    ctx = new OfflineAudioContext(2, frames + tail, MUSIC_RATE);
+  } catch {
+    // 古い端末では決まった細かさしか使えないことがある
+    return composeAt(mood, 44100);
+  }
+  return finish(mood, ctx, frames, tail);
+}
+
+async function composeAt(mood: BgmMood, rate: number): Promise<AudioBuffer> {
+  const L = loopSeconds(mood);
+  const frames = Math.ceil(L * rate);
+  const tail = Math.ceil((SONGS[mood].reverbSec + 4) * rate);
+  return finish(mood, new OfflineAudioContext(2, frames + tail, rate), frames, tail);
+}
+
+async function finish(mood: BgmMood, ctx: OfflineAudioContext, frames: number, tail: number): Promise<AudioBuffer> {
   const master = ctx.createGain();
   master.gain.value = 1.7;
   master.connect(ctx.destination);
@@ -328,7 +345,7 @@ async function compose(mood: BgmMood): Promise<AudioBuffer> {
   wet.connect(rev).connect(master);
   perform(ctx, dry, wet, mood, 0);
   const all = await ctx.startRendering();
-  const out = new AudioBuffer({ numberOfChannels: 2, length: frames, sampleRate: MUSIC_RATE });
+  const out = ctx.createBuffer(2, frames, ctx.sampleRate);
   for (let ch = 0; ch < 2; ch++) {
     const src = all.getChannelData(ch);
     const dst = new Float32Array(frames);
@@ -367,7 +384,7 @@ async function loadSaved(mood: BgmMood): Promise<AudioBuffer | null> {
     const rate = Number(f.type.split('rate=')[1]) || MUSIC_RATE;
     const pcm = new Int16Array(f.data);
     const n = pcm.length / 2;
-    const buf = new AudioBuffer({ numberOfChannels: 2, length: n, sampleRate: rate });
+    const buf = new OfflineAudioContext(2, 1, rate).createBuffer(2, n, rate);
     const l = new Float32Array(n);
     const r = new Float32Array(n);
     for (let i = 0; i < n; i++) {
