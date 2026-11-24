@@ -1,4 +1,4 @@
-import { ArrayBufferTarget, Muxer } from 'mp4-muxer';
+import { ALL_FORMATS, AudioBufferSource, BlobSource, BufferTarget, CanvasSink, CanvasSource, Input, Mp4OutputFormat, Output, canEncodeAudio, canEncodeVideo } from 'mediabunny';
 import { loadFile, thumbKey } from '../data/repository';
 import { CAPTION_TOP, drawShaped, type PhotoShape } from './shape';
 import { formatDot } from './format';
@@ -22,30 +22,59 @@ import { SEASON_TINT, particles, seasonOf, type Particle, type Season } from './
 
 /* 思い出ムービーを動画ファイル（MP4）にする。
  *
- * 画面の再生と同じ見た目を、見えないキャンバスに1コマずつ描き直して動画にする。
- * - スマホの動画変換機能（WebCodecs）が使えれば、実時間より速く作れる
- * - 使えなければ、キャンバスを実時間で録画する（動画の長さと同じだけ時間がかかる）
+ * 画面の再生と同じ見た目を、見えないキャンバスに1コマずつ描いて動画にする。
+ * 書き出し方は2つ：
+ * - きれいに書き出す（標準）：スマホの動画変換機能（WebCodecs のハードウェア変換）で1コマずつ変換する。
+ *   Mediabunny というライブラリで MP4（H.264＋AAC）にする。対応していない古い端末では下の方法に切り替える。
+ * - 速い書き出し：画面の再生と同じように動かしながら録画する（MediaRecorder）。動画の長さとほぼ同じ時間で終わる。
  *
- * 画面の再生は CSS のアニメーションで動いているので、ここでは同じ動き
- * （フェード・漂い・光の粒・字幕）を計算で再現している。 */
+ * 速くするための工夫：
+ * - 写真ごとのぼかし背景・切り抜き・字幕・光の粒の絵は、1回だけ作って使い回す
+ * - 動画素材は1コマずつ探し直さず（シークせず）、頭から順番に取り出す（VideoDecoder）
+ * - かかった時間を種類ごとに記録して、残り時間の見積もりと、遅いときの原因調べに使う */
 
 /** 動画の論理サイズ（スマホの画面と同じくらい）。実際の画素数は SCALE 倍 */
 const LW = 360;
 const LH = 640;
-const SCALE = 2; // → 720 × 1280
-const W = LW * SCALE;
-const H = LH * SCALE;
 const FPS = 30;
-/** 画質（ビット毎秒）。ゆっくり動く映像なので控えめでもきれい。ファイルを小さくして共有しやすくする */
-const BITRATE = 3_000_000;
 const OPEN_MS = 700; // 最初の黒からのフェード
 const TAIL_MS = 600; // 最後の余韻
 
+export type ExportQuality = 'standard' | 'high';
+export type ExportMode = 'encode' | 'realtime';
+
+/** 画質ごとの大きさ（標準 720×1280、高画質 1080×1920）と、1秒あたりのデータ量 */
+const QUALITY: Record<ExportQuality, { scale: number; bitrate: number; label: string }> = {
+  standard: { scale: 2, bitrate: 3_000_000, label: '標準（720p）' },
+  high: { scale: 3, bitrate: 6_000_000, label: '高画質（1080p）' },
+};
+let SCALE = 2;
+let W = LW * SCALE;
+let H = LH * SCALE;
+let BITRATE = QUALITY.standard.bitrate;
+function setQuality(q: ExportQuality) {
+  SCALE = QUALITY[q].scale;
+  W = LW * SCALE;
+  H = LH * SCALE;
+  BITRATE = QUALITY[q].bitrate;
+}
+
 export interface ExportProgress {
-  /** 0〜1 */
+  /** 0〜1（なめらかに増える） */
   ratio: number;
-  /** 残り時間の目安（秒）。わからないときは undefined */
+  /** 残り時間の目安（秒）。計算中は undefined */
   remainingSec?: number;
+  /** 今していること（画面に出す） */
+  label?: string;
+}
+
+export interface ExportStats {
+  method: string;
+  quality: string;
+  frames: number;
+  seconds: number;
+  /** 種類ごとにかかった時間（秒） */
+  parts: Record<string, number>;
 }
 
 export interface ExportResult {
@@ -55,6 +84,9 @@ export interface ExportResult {
   durationSec: number;
   /** 音（BGM・動画の音）が入ったか */
   audioIncluded: boolean;
+  /** 高画質を選んだが、この端末では標準画質で書き出した */
+  downgraded?: boolean;
+  stats: ExportStats;
 }
 
 export interface ExportOptions {
@@ -63,13 +95,31 @@ export interface ExportOptions {
   bgm: BgmChoice;
   /** 写真の形（設定で選んだもの） */
   shape: PhotoShape;
+  quality: ExportQuality;
+  mode: ExportMode;
   /**
-   * 実時間で録画するときに使う音の出口。iPhone ではボタンを押したその場で作る必要があるので、
+   * 再生しながら録画するときに使う音の出口。iPhone ではボタンを押したその場で作る必要があるので、
    * 画面側で createExportAudioContext() を呼んで渡す。
    */
   audioCtx?: AudioContext;
   onProgress: (p: ExportProgress) => void;
   signal: AbortSignal;
+}
+
+// ---------------------------------------------------------------- かかった時間の記録
+
+class Prof {
+  parts: Record<string, number> = {};
+  private t = performance.now();
+  /** 前回からの時間を label に足す */
+  lap(label: string) {
+    const now = performance.now();
+    this.parts[label] = (this.parts[label] ?? 0) + (now - this.t);
+    this.t = now;
+  }
+  mark() {
+    this.t = performance.now();
+  }
 }
 
 // ---------------------------------------------------------------- タイミング
@@ -128,29 +178,35 @@ const easeInOut = bezier(0.42, 0, 0.58, 1);
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
-function parseRgb(c: string): [number, number, number] {
-  const m = c.match(/\d+/g);
-  return m ? [+m[0], +m[1], +m[2]] : [255, 220, 170];
-}
-const mixRgb = (a: string, b: string, t: number) => {
-  const x = parseRgb(a);
-  const y = parseRgb(b);
-  return `rgb(${[0, 1, 2].map((i) => Math.round(lerp(x[i], y[i], t))).join(',')})`;
-};
 
 // ---------------------------------------------------------------- 素材の準備
+
+/** 動画素材のコマを、頭から順番に取り出す係（1コマずつ探し直さない） */
+interface FrameStream {
+  /** 次のコマ（同じ時刻が続くときは null のことがある） */
+  next(): Promise<CanvasImageSource | null>;
+  close(): void;
+}
 
 interface Prepared {
   placement: Placement;
   palette: Palette;
   /** ぼかした写真などで作った背景（全画面） */
   bg: HTMLCanvasElement;
-  /** 丸く切り抜いた写真（写真のとき） */
-  circle?: HTMLCanvasElement;
+  /** 選んだ形に切り抜いた写真（写真のとき） */
+  shaped?: HTMLCanvasElement;
+  /** 写真のない記録・見つからない写真：丸い淡い光と文字 */
+  textCircle?: HTMLCanvasElement;
+  /** 字幕（日付とコメント）を、影つきで先に描いたもの */
+  caption?: { canvas: HTMLCanvasElement; x: number; y: number; w: number; h: number };
+  /** 動画：順番にコマを取り出す（きれいに書き出すとき） */
+  frames?: FrameStream;
+  /** 動画：再生しながら録画するとき、または順番に取り出せない端末 */
   video?: HTMLVideoElement;
-  videoUrl?: string;
-  /** 動画のコマを描くための作業用キャンバス */
+  videoStarted?: boolean;
+  /** 動画のコマを形に切り抜くための作業用キャンバスと、最後に描いたコマ */
   videoCanvas?: HTMLCanvasElement;
+  hasFrame?: boolean;
   missing: boolean;
   dispose(): void;
 }
@@ -272,81 +328,59 @@ function renderBackground(photo: CanvasImageSource | undefined, pw: number, ph: 
   return c;
 }
 
-async function prepare(slide: Slide, shape: PhotoShape): Promise<Prepared> {
-  const placement = place(slide.key, LW, LH);
-  const px = Math.round(placement.d * SCALE);
-  const media = slide.media;
-  const thumbBlob = media && !media.missing && media.hasThumb ? await loadFile(thumbKey(media.id)) : null;
-
-  if (media?.kind === 'photo' && !media.missing) {
-    const blob = await loadFile(media.id);
-    if (blob) {
-      const img = await toBitmap(blob);
-      const [w, h] = sizeOf(img);
-      const palette = extractPalette(img);
-      const circle = canvas(px, px);
-      const cctx = circle.getContext('2d')!;
-      drawShaped(cctx, img, w, h, px, shape, slide.key);
-      const bg = renderBackground(img, w, h, palette, seasonOf(slide.date));
-      if ('close' in img) img.close();
-      return { placement, palette, bg, circle, missing: false, dispose: () => {} };
+/** 動画の素材を開く（Mediabunny）。読めない形式なら null */
+async function openVideo(blob: Blob) {
+  try {
+    const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+    const track = await input.getPrimaryVideoTrack();
+    if (!track || !(await track.canDecode())) {
+      input.dispose?.();
+      return null;
     }
+    return { input, track, duration: await input.computeDuration() };
+  } catch {
+    return null;
   }
+}
 
-  if (media?.kind === 'video' && !media.missing) {
-    const blob = await loadFile(media.id);
-    if (blob) {
-      const videoUrl = URL.createObjectURL(blob);
-      const video = document.createElement('video');
-      video.muted = true;
-      video.playsInline = true;
-      video.preload = 'auto';
-      video.src = videoUrl;
-      await new Promise<void>((ok) => {
-        video.onloadeddata = () => ok();
-        video.onerror = () => ok();
-        setTimeout(ok, 8000);
-      });
-      let palette = DEFAULT_PALETTE;
-      let bgSrc: CanvasImageSource | undefined;
-      let bw = 0;
-      let bh = 0;
-      if (thumbBlob) {
-        const t = await toBitmap(thumbBlob);
-        palette = extractPalette(t);
-        [bw, bh] = sizeOf(t);
-        bgSrc = t;
-      }
-      const bg = renderBackground(bgSrc, bw, bh, palette, seasonOf(slide.date));
-      if (bgSrc && 'close' in bgSrc) (bgSrc as ImageBitmap).close();
-      return {
-        placement,
-        palette,
-        bg,
-        video,
-        videoUrl,
-        videoCanvas: canvas(px, px),
-        missing: !video.videoWidth,
-        dispose: () => {
-          video.removeAttribute('src');
-          video.load();
-          URL.revokeObjectURL(videoUrl);
-        },
-      };
-    }
-  }
-
-  // 写真のない記録・見つからない写真
+/** 決まった時刻のコマを、頭から順番に取り出す */
+function frameStream(track: NonNullable<Awaited<ReturnType<typeof openVideo>>>['track'], px: number, times: number[]): FrameStream {
+  const sink = new CanvasSink(track, { width: px, height: px, fit: 'cover', poolSize: 3 });
+  const it = sink.canvasesAtTimestamps(times);
+  let done = false;
   return {
-    placement,
-    palette: DEFAULT_PALETTE,
-    bg: renderBackground(undefined, 0, 0, DEFAULT_PALETTE, seasonOf(slide.date)),
-    missing: !!media,
-    dispose: () => {},
+    async next() {
+      if (done) return null;
+      const r = await it.next();
+      if (r.done) {
+        done = true;
+        return null;
+      }
+      return r.value ? (r.value.canvas as CanvasImageSource) : null;
+    },
+    close() {
+      done = true;
+      void it.return(undefined).catch(() => {});
+    },
   };
 }
 
-/** 動画の指定の時刻のコマに合わせる */
+function htmlVideo(blob: Blob): Promise<{ video: HTMLVideoElement; url: string }> {
+  const url = URL.createObjectURL(blob);
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  video.src = url;
+  return new Promise((ok) => {
+    const done = () => ok({ video, url });
+    video.onloadeddata = done;
+    video.onerror = done;
+    setTimeout(done, 8000);
+  });
+}
+
+/** 動画の指定の時刻のコマに合わせる（順番に取り出せない端末のときだけ使う。遅い） */
 function seek(v: HTMLVideoElement, sec: number): Promise<void> {
   const target = Math.max(0, Math.min(sec, (v.duration || 0) - 0.04));
   if (Math.abs(v.currentTime - target) < 0.012) return Promise.resolve();
@@ -401,6 +435,239 @@ function shadowText(ctx: CanvasRenderingContext2D, text: string, x: number, y: n
   ctx.fillText(text, x, y); // 二度描きで影を濃く（画面の text-shadow に近づける）
   ctx.shadowBlur = 0;
   ctx.shadowColor = 'transparent';
+}
+
+/** 字幕（日付とコメント）を、影つきで1回だけ描いておく */
+function renderCaption(slide: Slide, pl: Placement, shape: PhotoShape, showDate: boolean): Prepared['caption'] {
+  const hasComment = !!slide.comment && !!slide.media;
+  if (!hasComment && !showDate) return undefined;
+  const PAD = 18; // 影の分の余白
+  const measure = canvas(1, 1).getContext('2d')!;
+  measure.font = `16px ${FONT}`;
+  const lines = hasComment ? wrap(measure, slide.comment, pl.commentWidth, 4) : [];
+  const lh = 16 * 1.75;
+  const dateH = showDate ? 12 * 1.6 + 2 : 0;
+  const w = pl.commentWidth + PAD * 2;
+  const h = dateH + lines.length * lh + PAD * 2;
+  const c = canvas(w * SCALE, h * SCALE);
+  const ctx = c.getContext('2d')!;
+  ctx.scale(SCALE, SCALE);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const cx = w / 2;
+  let y = PAD;
+  if (showDate) {
+    ctx.font = `12px ${FONT}`;
+    setSpacing(ctx, 1.4);
+    shadowText(ctx, formatDot(slide.date), cx, y + 2, 'rgba(255,246,232,0.62)', 'rgba(0,0,0,0.8)', 10 * (SCALE / 2));
+    y += dateH;
+  }
+  ctx.font = `16px ${FONT}`;
+  setSpacing(ctx, 0);
+  lines.forEach((line, n) => shadowText(ctx, line, cx, y + n * lh + (lh - 16) / 2, '#fbf3e6', 'rgba(0,0,0,0.85)', 12 * (SCALE / 2)));
+  return { canvas: c, x: pl.x + pl.commentLeft - PAD, y: pl.y + pl.d * CAPTION_TOP[shape] - 6 - PAD, w, h };
+}
+
+/** 写真のない記録：丸い淡い光の中に文字（1回だけ描いておく） */
+function renderTextCircle(pl: Placement, text: string): HTMLCanvasElement {
+  const c = canvas(pl.d * SCALE, pl.d * SCALE);
+  const ctx = c.getContext('2d')!;
+  ctx.scale(SCALE, SCALE);
+  const r = pl.d / 2;
+  const g = ctx.createRadialGradient(r, r, 0, r, r, r * Math.SQRT2);
+  g.addColorStop(0, 'rgba(255,230,190,0.16)');
+  g.addColorStop(0.55, 'rgba(255,230,190,0.06)');
+  g.addColorStop(0.72, 'rgba(255,230,190,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(r, r, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.font = `17px ${FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lines = wrap(ctx, text, pl.d * 0.64, 6);
+  const lh = 17 * 1.8;
+  lines.forEach((line, n) => shadowText(ctx, line, r, r + (n - (lines.length - 1) / 2) * lh, '#f8eedf', 'rgba(0,0,0,0.6)', 16 * (SCALE / 2)));
+  return c;
+}
+
+/** 文字の影：キャンバスの影はキャンバスの拡大の影響を受けないので、拡大率をかけた大きさで渡す */
+function tagsCanvas(text: string): HTMLCanvasElement {
+  const m = canvas(1, 1).getContext('2d')!;
+  m.font = `12px ${FONT}`;
+  const w = m.measureText(text).width + 40;
+  const c = canvas(w * SCALE, 36 * SCALE);
+  const ctx = c.getContext('2d')!;
+  ctx.scale(SCALE, SCALE);
+  ctx.font = `12px ${FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  setSpacing(ctx, 0.5);
+  shadowText(ctx, text, w / 2, 12, '#e6d9c8', 'rgba(0,0,0,0.8)', 10 * (SCALE / 2));
+  return c;
+}
+
+// ---------------------------------------------------------------- 光の粒・季節の粒の絵（1回だけ描いて使い回す）
+
+const spriteCache = new Map<string, HTMLCanvasElement>();
+const SPRITE = 64;
+
+/** 写真の色の光の粒 */
+function moteSprite(color: string): HTMLCanvasElement {
+  const key = `mote|${color}`;
+  let c = spriteCache.get(key);
+  if (c) return c;
+  c = canvas(SPRITE, SPRITE);
+  const ctx = c.getContext('2d')!;
+  const r = SPRITE / 2;
+  const g = ctx.createRadialGradient(r, r, 0, r, r, SPRITE * Math.SQRT1_2);
+  g.addColorStop(0, '#fff8ec');
+  g.addColorStop(0.22, color);
+  g.addColorStop(0.7, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(r, r, r, 0, Math.PI * 2);
+  ctx.fill();
+  spriteCache.set(key, c);
+  return c;
+}
+
+/** 季節の粒（花びら・葉・雪・ほたる）。大きさ1の形を SPRITE の大きさで描いておく */
+function particleSprite(p: Particle): HTMLCanvasElement {
+  const key = `p|${p.kind}|${p.color}`;
+  let c = spriteCache.get(key);
+  if (c) return c;
+  c = canvas(SPRITE, SPRITE);
+  const ctx = c.getContext('2d')!;
+  const s = SPRITE;
+  ctx.translate(s / 2, s / 2);
+  if (p.kind === 'petal' || p.kind === 'leaf') {
+    // 横 w × 縦 h の楕円（w を SPRITE の 0.6 倍にして、傾けてもはみ出さないように）
+    const w = s * 0.6;
+    const h = p.kind === 'petal' ? w * 0.62 : w * 0.8;
+    const g = ctx.createRadialGradient(-w * 0.1, -h * 0.12, 0, 0, 0, w * 0.6);
+    g.addColorStop(0, p.kind === 'petal' ? '#fff7fa' : p.color);
+    g.addColorStop(p.kind === 'petal' ? 0.62 : 1, p.color);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, w / 2, h / 2, p.kind === 'leaf' ? Math.PI / 4 : 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    const r = s * 0.3;
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 1.414);
+    g.addColorStop(0, p.kind === 'snow' ? '#ffffff' : '#fffde6');
+    g.addColorStop(p.kind === 'snow' ? 0.35 : 0.26, p.kind === 'snow' ? 'rgba(255,255,255,0.85)' : p.color);
+    g.addColorStop(0.7, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  spriteCache.set(key, c);
+  return c;
+}
+
+/**
+ * 1枚分の素材を用意する。
+ * videoTimes：動画のとき、各コマで使う動画の時刻（秒）。順番に取り出すために先に決めておく
+ */
+async function prepare(
+  slide: Slide,
+  shape: PhotoShape,
+  showDate: boolean,
+  opts: { videoTimes?: number[]; realtime: boolean },
+): Promise<Prepared> {
+  const placement = place(slide.key, LW, LH);
+  const px = Math.round(placement.d * SCALE);
+  const media = slide.media;
+  const caption = renderCaption(slide, placement, shape, showDate);
+  const season = seasonOf(slide.date);
+
+  if (media?.kind === 'photo' && !media.missing) {
+    const blob = await loadFile(media.id);
+    if (blob) {
+      const img = await toBitmap(blob);
+      const [w, h] = sizeOf(img);
+      const palette = extractPalette(img);
+      const shaped = canvas(px, px);
+      drawShaped(shaped.getContext('2d')!, img, w, h, px, shape, slide.key);
+      const bg = renderBackground(img, w, h, palette, season);
+      if ('close' in img) img.close();
+      return { placement, palette, bg, shaped, caption, missing: false, dispose: () => {} };
+    }
+  }
+
+  if (media?.kind === 'video' && !media.missing) {
+    const blob = await loadFile(media.id);
+    if (blob) {
+      const thumbBlob = media.hasThumb ? await loadFile(thumbKey(media.id)) : null;
+      let palette = DEFAULT_PALETTE;
+      let bg: HTMLCanvasElement;
+      if (thumbBlob) {
+        const t = await toBitmap(thumbBlob);
+        palette = extractPalette(t);
+        const [bw, bh] = sizeOf(t);
+        bg = renderBackground(t, bw, bh, palette, season);
+        if ('close' in t) t.close();
+      } else bg = renderBackground(undefined, 0, 0, palette, season);
+      const base = { placement, palette, bg, caption, videoCanvas: canvas(px, px), missing: false };
+
+      // きれいに書き出すとき：頭から順番にコマを取り出す
+      if (!opts.realtime && opts.videoTimes) {
+        const v = await openVideo(blob);
+        if (v) {
+          const frames = frameStream(v.track, px, opts.videoTimes);
+          return {
+            ...base,
+            frames,
+            dispose: () => {
+              frames.close();
+              v.input.dispose?.();
+            },
+          };
+        }
+      }
+      // 再生しながら録画するとき、または順番に取り出せない端末：<video> で
+      const { video, url } = await htmlVideo(blob);
+      return {
+        ...base,
+        video,
+        missing: !video.videoWidth,
+        dispose: () => {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+          URL.revokeObjectURL(url);
+        },
+      };
+    }
+  }
+
+  // 写真のない記録・見つからない写真
+  return {
+    placement,
+    palette: DEFAULT_PALETTE,
+    bg: renderBackground(undefined, 0, 0, DEFAULT_PALETTE, season),
+    textCircle: renderTextCircle(placement, media ? '画像が見つかりません' : slide.memory.text),
+    caption,
+    missing: !!media,
+    dispose: () => {},
+  };
+}
+
+/** 動画の長さ（秒）。読めなければ null */
+async function videoDuration(blob: Blob): Promise<number | null> {
+  const v = await openVideo(blob);
+  if (v) {
+    v.input.dispose?.();
+    return v.duration;
+  }
+  const { video, url } = await htmlVideo(blob);
+  const d = video.duration;
+  video.removeAttribute('src');
+  video.load();
+  URL.revokeObjectURL(url);
+  return isFinite(d) && d > 0 ? d : null;
 }
 
 // ---------------------------------------------------------------- 音（BGM と動画の音）
@@ -531,37 +798,93 @@ const hasSound = (s: Soundtrack) => !!s.bgm || s.clips.length > 0;
 // ---------------------------------------------------------------- 1コマを描く
 
 class Renderer {
-  readonly canvas = canvas(W, H);
-  private ctx = this.canvas.getContext('2d')!;
+  readonly canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
   private prepared = new Map<number, Promise<Prepared>>();
   private ready = new Map<number, Prepared>();
+  private tags = new Map<string, HTMLCanvasElement>();
+  private videoSec = new Map<number, number>();
   timing: Timing;
 
   constructor(
     private slides: Slide[],
     private showDate: boolean,
-    readonly shape: PhotoShape = 'circle',
+    readonly shape: PhotoShape,
+    /** 再生しながら録画する（動画は再生して描く） */
+    readonly realtime: boolean,
+    private prof: Prof,
   ) {
+    this.canvas = canvas(W, H);
+    this.ctx = this.canvas.getContext('2d', { alpha: false }) ?? this.canvas.getContext('2d')!;
     this.timing = schedule(slides, new Map());
   }
 
-  /** 動画の長さがわかったら、タイミングを決め直す */
+  /** 動画の長さを調べて、タイミングを決め直す */
   async measureVideos() {
-    const secs = new Map<number, number>();
     for (let i = 0; i < this.slides.length; i++) {
-      const s = this.slides[i];
-      if (s.media?.kind !== 'video' || s.media.missing) continue;
-      const p = await this.need(i);
-      if (p.video?.duration && isFinite(p.video.duration)) secs.set(i, p.video.duration);
-      this.release(i);
+      const m = this.slides[i].media;
+      if (m?.kind !== 'video' || m.missing) continue;
+      const blob = await loadFile(m.id);
+      const d = blob && (await videoDuration(blob));
+      if (d) this.videoSec.set(i, d);
     }
-    this.timing = schedule(this.slides, secs);
+    this.timing = schedule(this.slides, this.videoSec);
+  }
+
+  get frameCount() {
+    return Math.ceil((this.timing.total / 1000) * FPS);
+  }
+
+  private end(i: number) {
+    const { start, dwell } = this.timing;
+    return start[i] + dwell[i] + (i === this.slides.length - 1 ? FADE_MS : 0);
+  }
+  private nextStart(i: number) {
+    const { start, dwell } = this.timing;
+    return i < this.slides.length - 1 ? start[i + 1] : start[i] + dwell[i];
+  }
+
+  /** 動画のスライドで、各コマに使う動画の時刻（秒）。画面の再生と同じく、次の写真が出始めたら止まる */
+  videoTimes(i: number): number[] {
+    const s = this.timing.start[i];
+    const from = Math.ceil((s * FPS) / 1000);
+    const to = Math.ceil((this.end(i) * FPS) / 1000);
+    const dur = this.videoSec.get(i) ?? VIDEO_MAX_MS / 1000;
+    const times: number[] = [];
+    for (let n = from; n < to; n++) {
+      const t = (n * 1000) / FPS;
+      if (t < s) continue;
+      const clock = Math.min(t, this.nextStart(i));
+      times.push(Math.max(0, Math.min((clock - s) / 1000, dur - 1 / FPS)));
+    }
+    return times;
+  }
+
+  /** コマごとの種類（動画が映っているか）。残り時間の見積もりに使う */
+  frameKinds(): Uint8Array {
+    const kinds = new Uint8Array(this.frameCount);
+    this.slides.forEach((sl, i) => {
+      if (sl.media?.kind !== 'video' || sl.media.missing) return;
+      const from = Math.ceil((this.timing.start[i] * FPS) / 1000);
+      const to = Math.min(kinds.length, Math.ceil((this.end(i) * FPS) / 1000));
+      for (let n = from; n < to; n++) kinds[n] = 1;
+    });
+    return kinds;
+  }
+
+  get videoCount() {
+    return this.slides.filter((s) => s.media?.kind === 'video' && !s.media.missing).length;
   }
 
   need(i: number): Promise<Prepared> {
     let p = this.prepared.get(i);
     if (!p) {
-      p = prepare(this.slides[i], this.shape).then((r) => {
+      const s = this.slides[i];
+      const isVideo = s.media?.kind === 'video';
+      p = prepare(s, this.shape, this.showDate, {
+        realtime: this.realtime,
+        videoTimes: isVideo && !this.realtime ? this.videoTimes(i) : undefined,
+      }).then((r) => {
         this.ready.set(i, r);
         return r;
       });
@@ -578,14 +901,12 @@ class Renderer {
 
   /** 時刻 t（ミリ秒）に必要なスライド */
   private active(t: number) {
-    const { start, dwell } = this.timing;
-    const last = this.slides.length - 1;
+    const { start } = this.timing;
     const visible: number[] = [];
     let current = 0;
-    for (let i = 0; i <= last; i++) {
+    for (let i = 0; i < this.slides.length; i++) {
       if (start[i] <= t) current = i;
-      const end = start[i] + dwell[i] + (i === last ? FADE_MS : 0);
-      if (start[i] <= t && t < end) visible.push(i);
+      if (start[i] <= t && t < this.end(i)) visible.push(i);
     }
     return { visible, current };
   }
@@ -604,12 +925,13 @@ class Renderer {
     void this.need(current).catch(() => {});
   }
 
-  /** t（ミリ秒）のコマを描く。動画はそのコマに合わせてから描く */
+  /** t（ミリ秒）のコマを描く */
   async draw(t: number) {
     const ctx = this.ctx;
-    const { start, dwell, total } = this.timing;
+    const prof = this.prof;
+    const { start, total } = this.timing;
     const { visible, current } = this.active(t);
-    const last = this.slides.length - 1;
+    prof.mark();
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
@@ -626,12 +948,12 @@ class Renderer {
       ctx.drawImage(curBg.bg, 0, 0);
       ctx.globalAlpha = 1;
     }
+    prof.lap('背景（ぼかし写真の重ね描き）');
 
     // 光の粒（写真の色で、色もゆっくり移り変わる）
     const pal1 = curBg?.palette ?? DEFAULT_PALETTE;
     const pal0 = prevBg?.palette ?? pal1;
-    const colA = mixRgb(pal0.glow1, pal1.glow1, bgAlpha);
-    this.drawMotes(t / 1000, colA);
+    this.drawMotes(t / 1000, pal0.glow1, pal1.glow1, bgAlpha);
 
     // 季節の粒：季節が変わったら、新しい季節の粒がふわっと出てくる
     const s1 = seasonOf(this.slides[current].date);
@@ -639,22 +961,19 @@ class Renderer {
     const sa = s0 === s1 ? 1 : ease(bgAlpha);
     if (s0 !== s1 && sa < 1) this.drawSeason(t / 1000, s0, 1 - sa);
     this.drawSeason(t / 1000, s1, sa);
+    prof.lap('光の粒・季節の粒');
 
-    ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
-
-    // タグ（上に小さく）
+    // タグ（上に小さく）。同じ記録が続いている間は出したまま、記録が変わったらフェードイン
     const curSlide = this.slides[current];
     if (curSlide.memory.tags.length) {
-      // 同じ記録が続いている間は出したまま、記録が変わったらフェードイン
       let j = current;
       while (j > 0 && this.slides[j - 1].memory.id === curSlide.memory.id) j--;
-      const since = t - start[j];
-      ctx.globalAlpha = ease(clamp01(since / 1600));
-      ctx.font = `12px ${FONT}`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      setSpacing(ctx, 0.5);
-      shadowText(ctx, curSlide.memory.tags.map((x) => `#${x}`).join('  '), LW / 2, 68, '#e6d9c8', 'rgba(0,0,0,0.8)', 10);
+      const text = curSlide.memory.tags.map((x) => `#${x}`).join('  ');
+      let tc = this.tags.get(text);
+      if (!tc) this.tags.set(text, (tc = tagsCanvas(text)));
+      ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+      ctx.globalAlpha = ease(clamp01((t - start[j]) / 1600));
+      ctx.drawImage(tc, LW / 2 - tc.width / SCALE / 2, 56, tc.width / SCALE, tc.height / SCALE);
       ctx.globalAlpha = 1;
     }
 
@@ -662,13 +981,15 @@ class Renderer {
     for (const i of visible) {
       const p = this.ready.get(i);
       if (!p) continue;
-      const nextStart = i < last ? start[i + 1] : start[i] + dwell[i];
+      const nextStart = this.nextStart(i);
+      // 動画は、映っている間は毎コマ1つずつ取り出す（見えないくらい薄いコマでも順番を守る）
+      await this.advanceVideo(i, p, t, nextStart);
       const fadeIn = ease(clamp01((t - start[i]) / FADE_MS));
       const fadeOut = t >= nextStart ? 1 - ease(clamp01((t - nextStart) / FADE_MS)) : 1;
       const opacity = Math.min(fadeIn, fadeOut);
-      if (opacity <= 0) continue;
-      await this.drawSlide(i, p, t, opacity, Math.min(t, nextStart));
+      if (opacity > 0) this.drawSlide(i, p, t, opacity);
     }
+    prof.lap('写真・字幕を描く');
 
     // 最初は黒からふわっと始まり、最後はゆっくり暗くなって終わる
     const openDark = 1 - ease(clamp01(t / OPEN_MS));
@@ -682,6 +1003,42 @@ class Renderer {
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = 1;
     }
+  }
+
+  /** 動画のコマを1つ進めて、形に切り抜く */
+  private async advanceVideo(i: number, p: Prepared, t: number, nextStart: number) {
+    if (!p.videoCanvas || p.missing) return;
+    const vctx = p.videoCanvas.getContext('2d')!;
+    const px = p.videoCanvas.width;
+    const key = this.slides[i].key;
+    this.prof.lap('写真・字幕を描く');
+    if (p.frames) {
+      // 頭から順番に取り出す（速い）
+      const img = await p.frames.next();
+      if (img) {
+        drawShaped(vctx, img, px, px, px, this.shape, key);
+        p.hasFrame = true;
+      }
+    } else if (p.video) {
+      const v = p.video;
+      if (this.realtime) {
+        // 再生しながら録画：動画もそのまま再生して、今のコマを描く
+        if (!p.videoStarted) {
+          p.videoStarted = true;
+          v.currentTime = 0;
+          void v.play().catch(() => {});
+        }
+        if (t >= nextStart && !v.paused) v.pause();
+      } else {
+        // 順番に取り出せない端末：その時刻のコマを探す（遅い）
+        await seek(v, (Math.min(t, nextStart) - this.timing.start[i]) / 1000);
+      }
+      if (v.readyState >= 2 && v.videoWidth) {
+        drawShaped(vctx, v, v.videoWidth, v.videoHeight, px, this.shape, key);
+        p.hasFrame = true;
+      }
+    }
+    this.prof.lap('動画素材のコマを取り出す');
   }
 
   /** 季節の粒（画面の SeasonParticles と同じ動き） */
@@ -723,31 +1080,18 @@ class Renderer {
     ctx.rotate(rot);
     if (p.kind !== 'firefly') ctx.translate(lerp(-p.swayPx, p.swayPx, swing(p.sway)), 0);
     ctx.globalAlpha = a * (p.kind === 'petal' ? 0.82 : p.kind === 'leaf' ? 0.85 : p.kind === 'snow' ? 0.9 : 1);
-    if (p.kind === 'petal' || p.kind === 'leaf') {
-      const g = ctx.createRadialGradient(-w * 0.1, -h * 0.12, 0, 0, 0, w * 0.6);
-      g.addColorStop(0, p.kind === 'petal' ? '#fff7fa' : p.color);
-      g.addColorStop(p.kind === 'petal' ? 0.62 : 1, p.color);
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.ellipse(0, 0, w / 2, h / 2, p.kind === 'leaf' ? Math.PI / 4 : 0, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      const r = w / 2;
-      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 1.414);
-      g.addColorStop(0, p.kind === 'snow' ? '#ffffff' : '#fffde6');
-      g.addColorStop(p.kind === 'snow' ? 0.35 : 0.26, p.kind === 'snow' ? 'rgba(255,255,255,0.85)' : p.color);
-      g.addColorStop(0.7, 'rgba(255,255,255,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(0, 0, r * 1.6, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // 先に描いておいた絵を、大きさに合わせて置く（絵の 0.6 倍が粒の幅）
+    const D = w / 0.6;
+    ctx.drawImage(particleSprite(p), -D / 2, -D / 2, D, D);
   }
 
-  private drawMotes(sec: number, colA: string) {
+  /** 写真の色の光の粒。色が移り変わる間は、前の色と今の色の粒を重ねる */
+  private drawMotes(sec: number, color0: string, color1: string, mix: number) {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // 半分は写真の色の粒（残りの半分は季節の粒になった）
+    const sp1 = moteSprite(color1);
+    const sp0 = color0 !== color1 && mix < 1 ? moteSprite(color0) : null;
+    // 半分は写真の色の粒（残りの半分は季節の粒）
     MOTES.forEach((m, k) => {
       if (k % 2 === 1) return;
       // CSS: mote（行って戻る、ease-in-out）。開始は負の遅れで途中から
@@ -764,26 +1108,21 @@ class Renderer {
       const cx = (m.left / 100) * W + size / 2 + tx;
       const cy = (m.top / 100) * H + size / 2 + ty;
       const r = (size / 2) * sc;
-      const R = size * Math.SQRT1_2 * sc;
-      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
-      g.addColorStop(0, '#fff8ec');
-      g.addColorStop(0.22, colA);
-      g.addColorStop(0.7, 'rgba(0,0,0,0)');
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fill();
+      if (sp0) {
+        ctx.globalAlpha = alpha * (1 - mix);
+        ctx.drawImage(sp0, cx - r, cy - r, r * 2, r * 2);
+        ctx.globalAlpha = alpha * mix;
+      } else ctx.globalAlpha = alpha;
+      ctx.drawImage(sp1, cx - r, cy - r, r * 2, r * 2);
     });
     ctx.globalAlpha = 1;
   }
 
-  private async drawSlide(i: number, p: Prepared, t: number, opacity: number, mediaClock: number) {
+  private drawSlide(i: number, p: Prepared, t: number, opacity: number) {
     const ctx = this.ctx;
     const slide = this.slides[i];
-    const { start } = this.timing;
     const pl = p.placement;
-    const local = t - start[i];
+    const local = t - this.timing.start[i];
 
     // 漂い（CSS の float：-向き → +向き、0.97 → 1.03 倍）
     const f = easeInOut(clamp01(local / driftMs(slide)));
@@ -798,70 +1137,21 @@ class Renderer {
     ctx.translate(-cx, -cy);
     ctx.globalAlpha = opacity;
 
-    // 写真・動画・文字
-    if (p.circle) {
-      ctx.drawImage(p.circle, pl.x, pl.y, pl.d, pl.d);
-    } else if (p.video && p.videoCanvas && !p.missing) {
-      await seek(p.video, (mediaClock - start[i]) / 1000);
-      const vc = p.videoCanvas;
-      const vctx = vc.getContext('2d')!;
-      drawShaped(vctx, p.video, p.video.videoWidth, p.video.videoHeight, vc.width, this.shape, slide.key);
-      ctx.drawImage(vc, pl.x, pl.y, pl.d, pl.d);
-    } else {
-      this.drawTextCircle(pl, p.missing ? '画像が見つかりません' : slide.memory.text);
-    }
+    if (p.shaped) ctx.drawImage(p.shaped, pl.x, pl.y, pl.d, pl.d);
+    else if (p.videoCanvas && p.hasFrame) ctx.drawImage(p.videoCanvas, pl.x, pl.y, pl.d, pl.d);
+    else if (p.textCircle) ctx.drawImage(p.textCircle, pl.x, pl.y, pl.d, pl.d);
 
     // 字幕（日付とコメント）：写真より少し遅れてふわっと
-    const hasComment = !!slide.comment && !!slide.media;
-    if (hasComment || this.showDate) {
+    const cap = p.caption;
+    if (cap) {
       const k = ease(clamp01((local - COMMENT_DELAY_MS) / COMMENT_FADE_MS));
       if (k > 0) {
         ctx.globalAlpha = opacity * k;
-        const left = pl.x + pl.commentLeft;
-        const centerX = left + pl.commentWidth / 2;
-        let y = pl.y + pl.d * CAPTION_TOP[this.shape] - 6 + (1 - k) * 8;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        if (this.showDate) {
-          ctx.font = `12px ${FONT}`;
-          setSpacing(ctx, 1.4);
-          shadowText(ctx, formatDot(slide.date), centerX, y + 2, 'rgba(255,246,232,0.62)', 'rgba(0,0,0,0.8)', 10);
-          y += 12 * 1.6 + 2;
-        }
-        if (hasComment) {
-          ctx.font = `16px ${FONT}`;
-          setSpacing(ctx, 0);
-          const lh = 16 * 1.75;
-          wrap(ctx, slide.comment, pl.commentWidth, 4).forEach((line, n) =>
-            shadowText(ctx, line, centerX, y + n * lh + (lh - 16) / 2, '#fbf3e6', 'rgba(0,0,0,0.85)', 12),
-          );
-        }
+        ctx.drawImage(cap.canvas, cap.x, cap.y + (1 - k) * 8, cap.w, cap.h);
       }
     }
     ctx.globalAlpha = 1;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }
-
-  /** 写真のない記録：丸い淡い光の中に文字 */
-  private drawTextCircle(pl: Placement, text: string) {
-    const ctx = this.ctx;
-    const r = pl.d / 2;
-    const cx = pl.x + r;
-    const cy = pl.y + r;
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * Math.SQRT2);
-    g.addColorStop(0, 'rgba(255,230,190,0.16)');
-    g.addColorStop(0.55, 'rgba(255,230,190,0.06)');
-    g.addColorStop(0.72, 'rgba(255,230,190,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.font = `17px ${FONT}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const lines = wrap(ctx, text, pl.d * 0.64, 6);
-    const lh = 17 * 1.8;
-    lines.forEach((line, n) => shadowText(ctx, line, cx, cy + (n - (lines.length - 1) / 2) * lh, '#f8eedf', 'rgba(0,0,0,0.6)', 16));
   }
 
   dispose() {
@@ -869,181 +1159,270 @@ class Renderer {
   }
 }
 
+// ---------------------------------------------------------------- 残り時間の見積もり
+
+/**
+ * 写真のコマと動画のコマは速さが違うので、別々に測って足し合わせる：
+ *   残り時間 ＝ 残りの写真のコマ数 × 写真1コマの時間 ＋ 残りの動画のコマ数 × 動画1コマの時間
+ * 動画の速さは、書き出しの最初に少しだけ試しに取り出して測る。
+ * 画面の表示は、急に増えたり減ったりしないよう、なめらかに近づける。
+ */
+class Estimator {
+  private cost = [0, 0];
+  private samples = [0, 0];
+  private done = [0, 0];
+  private total = [0, 0];
+  /** 動画のコマで、写真のコマより余分にかかる時間（試しに測った値） */
+  videoExtra: number | null = null;
+  private began = performance.now();
+  private shown: number | null = null;
+  private lastShown = 0;
+  private ratio = 0;
+
+  constructor(private kinds: Uint8Array) {
+    for (const k of kinds) this.total[k]++;
+  }
+
+  record(n: number, ms: number) {
+    const k = this.kinds[n];
+    this.done[k]++;
+    this.samples[k]++;
+    // 最近の速さを重く見る（素材の準備などで一時的に遅いコマも、ならして反映する）
+    this.cost[k] = this.samples[k] === 1 ? ms : this.cost[k] * 0.96 + ms * 0.04;
+  }
+
+  /** 残り時間（ミリ秒）。まだ測れていなければ null */
+  private estimate(): number | null {
+    const elapsed = performance.now() - this.began;
+    const photoReady = this.samples[0] >= 45 || (this.total[0] === 0 && this.samples[1] >= 15) || elapsed > 15000;
+    const videoReady = this.total[1] === 0 || this.samples[1] >= 20 || this.videoExtra != null;
+    if (!photoReady || !videoReady) return null;
+    const cP = this.samples[0] ? this.cost[0] : this.cost[1];
+    const cV = this.samples[1] >= 20 ? this.cost[1] : cP + (this.videoExtra ?? 0);
+    return (this.total[0] - this.done[0]) * cP + (this.total[1] - this.done[1]) * cV;
+  }
+
+  progress(label?: string): ExportProgress {
+    const now = performance.now();
+    const est = this.estimate();
+    const framesDone = this.done[0] + this.done[1];
+    const framesAll = this.total[0] + this.total[1] || 1;
+    if (est == null) {
+      this.ratio = Math.max(this.ratio, (framesDone / framesAll) * 0.5);
+      return { ratio: this.ratio, label: label ?? '残り時間を計算中…' };
+    }
+    const sec = est / 1000;
+    if (this.shown == null) this.shown = sec;
+    else {
+      // 時間がたった分は減らし、新しい見積もりには少しずつ近づける
+      const dt = (now - this.lastShown) / 1000;
+      this.shown = Math.max(0, this.shown - dt);
+      this.shown += (sec - this.shown) * 0.12;
+    }
+    this.lastShown = now;
+    const work = (now - this.began) / 1000;
+    // バーも、目標に少しずつ近づける（急に飛ばないように）。戻ることはない
+    const target = Math.min(0.995, work / (work + this.shown));
+    this.ratio = Math.max(this.ratio, this.ratio + (target - this.ratio) * 0.25);
+    return { ratio: this.ratio, remainingSec: this.shown, label };
+  }
+}
+
 // ---------------------------------------------------------------- 動画にする
-
-const H264 = ['avc1.640028', 'avc1.4d0028', 'avc1.42001f'];
-
-async function pickCodec(): Promise<string | null> {
-  if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') return null;
-  for (const codec of H264) {
-    try {
-      const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate: BITRATE, framerate: FPS });
-      if (r.supported) return codec;
-    } catch {
-      /* 次の候補へ */
-    }
-  }
-  return null;
-}
-
-interface AudioCodec {
-  /** WebCodecs の名前 */
-  codec: string;
-  /** mp4-muxer の名前 */
-  mux: 'aac' | 'opus';
-}
-
-async function pickAudioCodec(): Promise<AudioCodec | null> {
-  if (typeof AudioEncoder === 'undefined' || typeof AudioData === 'undefined') return null;
-  const cands: AudioCodec[] = [{ codec: 'mp4a.40.2', mux: 'aac' }];
-  // 動作確認用（iPhone で再生しにくい形式なので、普段は使わない）
-  if ((globalThis as unknown as { __meguruTestOpus?: boolean }).__meguruTestOpus) cands.push({ codec: 'opus', mux: 'opus' });
-  for (const c of cands) {
-    try {
-      const r = await AudioEncoder.isConfigSupported({ codec: c.codec, sampleRate: SAMPLE_RATE, numberOfChannels: 2, bitrate: 128_000 });
-      if (r.supported) return c;
-    } catch {
-      /* 次の候補へ */
-    }
-  }
-  return null;
-}
 
 const canRecordRealtime = () => typeof MediaRecorder !== 'undefined' && 'captureStream' in HTMLCanvasElement.prototype;
 
-/**
- * 書き出しの方法（画面に出す説明用）。
- * withSound：BGM や動画の音を入れるか
- */
-export async function exportMethod(withSound: boolean): Promise<'fast' | 'realtime' | 'none'> {
-  const v = await pickCodec();
-  if (v && (!withSound || (await pickAudioCodec()))) return 'fast';
-  if (canRecordRealtime()) return 'realtime';
-  if (v) return 'fast';
-  return 'none';
+/** この端末でできること（書き出す前の画面で使う） */
+export async function exportCapabilities(): Promise<{ encode: boolean; high: boolean; realtime: boolean }> {
+  const check = async (q: ExportQuality) => {
+    try {
+      const s = QUALITY[q];
+      return await canEncodeVideo('avc', { width: LW * s.scale, height: LH * s.scale, bitrate: s.bitrate });
+    } catch {
+      return false;
+    }
+  };
+  return { encode: await check('standard'), high: await check('high'), realtime: canRecordRealtime() };
 }
 
-export async function exportMovie({ slides, showDate, bgm, shape, audioCtx, onProgress, signal }: ExportOptions): Promise<ExportResult> {
-  const r = new Renderer(slides, showDate, shape);
+/** AAC（音）に変換できるようにする。端末にできなければ、変換の部品（WebAssembly）を読み込む */
+async function ensureAac(): Promise<boolean> {
   try {
+    if (await canEncodeAudio('aac')) return true;
+    const { registerAacEncoder } = await import('@mediabunny/aac-encoder');
+    registerAacEncoder();
+    return await canEncodeAudio('aac');
+  } catch {
+    return false;
+  }
+}
+
+const abortError = () => new DOMException('中止しました', 'AbortError');
+const yieldToScreen = () => new Promise((ok) => setTimeout(ok, 0));
+
+export async function exportMovie(o: ExportOptions): Promise<ExportResult> {
+  const began = performance.now();
+  const prof = new Prof();
+  setQuality(o.quality);
+  let downgraded = false;
+  let realtime = o.mode === 'realtime';
+  if (!realtime) {
+    const caps = await exportCapabilities();
+    if (o.quality === 'high' && !caps.high && caps.encode) {
+      setQuality('standard');
+      downgraded = true;
+    }
+    if (!caps.encode) realtime = true; // 変換機能がない古い端末：再生しながら録画に切り替える
+  }
+  if (realtime && !canRecordRealtime()) throw new Error('この端末・ブラウザは動画の書き出しに対応していません');
+
+  const r = new Renderer(o.slides, o.showDate, o.shape, realtime, prof);
+  try {
+    o.onProgress({ ratio: 0, label: '素材を確かめています…' });
+    prof.mark();
     await r.measureVideos();
-    const sound = await buildSoundtrack(slides, r.timing, bgm);
+    prof.lap('素材の準備');
+    const sound = await buildSoundtrack(o.slides, r.timing, o.bgm);
+    prof.lap('音（BGM・動画の音）');
     const withSound = hasSound(sound);
-    const vcodec = await pickCodec();
-    const acodec = withSound ? await pickAudioCodec() : null;
-    if (vcodec && (!withSound || acodec)) return await encodeFast(r, vcodec, withSound ? { sound, codec: acodec! } : null, onProgress, signal);
-    if (canRecordRealtime()) return await recordRealtime(r, withSound && audioCtx ? { sound, ctx: audioCtx } : null, onProgress, signal);
-    if (vcodec) return await encodeFast(r, vcodec, null, onProgress, signal); // 音なしで書き出す
-    throw new Error('この端末・ブラウザは動画の書き出しに対応していません');
+    let result: Omit<ExportResult, 'stats'>;
+    let method: string;
+    if (realtime) {
+      method = '再生しながら録画（MediaRecorder）';
+      result = await recordRealtime(r, withSound && o.audioCtx ? { sound, ctx: o.audioCtx } : null, o.onProgress, o.signal);
+    } else {
+      const audioOk = withSound && (await ensureAac());
+      method = 'WebCodecs（ハードウェア変換）＋ Mediabunny';
+      result = await encodeFrames(r, audioOk ? sound : null, prof, o.onProgress, o.signal);
+    }
+    const stats: ExportStats = {
+      method,
+      quality: `${W}×${H}`,
+      frames: r.frameCount,
+      seconds: (performance.now() - began) / 1000,
+      parts: Object.fromEntries(Object.entries(prof.parts).map(([k, v]) => [k, Math.round(v / 100) / 10])),
+    };
+    (globalThis as unknown as { __exportStats?: ExportStats }).__exportStats = stats;
+    return { ...result, downgraded, stats };
   } finally {
     r.dispose();
   }
 }
 
-const abortError = () => new DOMException('中止しました', 'AbortError');
+/** 動画のコマの速さを、少しだけ試しに取り出して測る（残り時間の見積もり用） */
+async function probeVideoSpeed(r: Renderer, slides: Slide[]): Promise<number | null> {
+  const i = slides.findIndex((s) => s.media?.kind === 'video' && !s.media.missing);
+  if (i < 0) return null;
+  const blob = await loadFile(slides[i].media!.id);
+  const v = blob && (await openVideo(blob));
+  if (!v) return null;
+  const px = Math.round(place(slides[i].key, LW, LH).d * SCALE);
+  const times = r.videoTimes(i).slice(0, 20);
+  const stream = frameStream(v.track, px, times);
+  const scratch = canvas(px, px).getContext('2d')!;
+  const t0 = performance.now();
+  let n = 0;
+  for (let k = 0; k < times.length; k++) {
+    const img = await stream.next();
+    if (img) {
+      drawShaped(scratch, img, px, px, px, r.shape, slides[i].key);
+      n++;
+    }
+  }
+  stream.close();
+  v.input.dispose?.();
+  return n ? (performance.now() - t0) / n : null;
+}
 
-/** WebCodecs：1コマずつ描いて変換（実時間より速い） */
-async function encodeFast(
+/** きれいに書き出す：1コマずつ描いて、ハードウェアで MP4 に変換する */
+async function encodeFrames(
   r: Renderer,
-  codec: string,
-  audio: { sound: Soundtrack; codec: AudioCodec } | null,
+  sound: Soundtrack | null,
+  prof: Prof,
   onProgress: ExportOptions['onProgress'],
   signal: AbortSignal,
-): Promise<ExportResult> {
-  const muxer = new Muxer({
-    target: new ArrayBufferTarget(),
-    video: { codec: 'avc', width: W, height: H, frameRate: FPS },
-    ...(audio ? { audio: { codec: audio.codec.mux, numberOfChannels: 2, sampleRate: SAMPLE_RATE } } : {}),
-    fastStart: 'in-memory',
+): Promise<Omit<ExportResult, 'stats'>> {
+  const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target: new BufferTarget() });
+  // ハードウェアでの変換を優先する（使えない環境では、端末に任せる）
+  const accel = (await canEncodeVideo('avc', { width: W, height: H, bitrate: BITRATE, hardwareAcceleration: 'prefer-hardware' }).catch(() => false))
+    ? 'prefer-hardware'
+    : 'no-preference';
+  prof.parts[`（変換：${accel === 'prefer-hardware' ? 'ハードウェア' : '端末まかせ'}）`] = 0;
+  const video = new CanvasSource(r.canvas, {
+    codec: 'avc',
+    bitrate: BITRATE,
+    keyFrameInterval: 2,
+    hardwareAcceleration: accel,
   });
-  let failure: unknown;
+  output.addVideoTrack(video, { frameRate: FPS });
+  const audio = sound ? new AudioBufferSource({ codec: 'aac', bitrate: 128_000 }) : null;
+  if (audio) output.addAudioTrack(audio);
+  await output.start();
 
-  // 音：20秒ずつ演奏して変換する（メモリを使いすぎないように）
-  const AUDIO_SHARE = audio ? 0.08 : 0; // 進み具合のうち、音の分
-  if (audio) {
-    const aenc = new AudioEncoder({
-      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-      error: (e) => (failure = e),
-    });
-    aenc.configure({ codec: audio.codec.codec, sampleRate: SAMPLE_RATE, numberOfChannels: 2, bitrate: 128_000 });
-    const total = r.timing.total;
-    const CHUNK = 20_000;
-    for (let from = 0; from < total; from += CHUNK) {
-      if (signal.aborted) {
-        aenc.close();
-        throw abortError();
+  const kinds = r.frameKinds();
+  const est = new Estimator(kinds);
+  if (r.videoCount) {
+    onProgress({ ratio: 0, label: '動画素材の速さを測っています…' });
+    prof.mark();
+    est.videoExtra = await probeVideoSpeed(r, r['slides'] as Slide[]).catch(() => null);
+    prof.lap('速さの試し測り');
+  }
+
+  const total = r.timing.total;
+  const frames = r.frameCount;
+  let audioAt = 0;
+  try {
+    for (let n = 0; n < frames; n++) {
+      if (signal.aborted) throw abortError();
+      const f0 = performance.now();
+      const t = (n * 1000) / FPS;
+      // 音は映像より少し先まで、5秒ずつ作って入れる
+      if (audio && sound) {
+        while (audioAt < Math.min(total, t + 3000)) {
+          const to = Math.min(total, audioAt + 5000);
+          prof.mark();
+          await audio.add(await renderSound(sound, audioAt, to));
+          prof.lap('音（BGM・動画の音）');
+          audioAt = to;
+        }
       }
-      const to = Math.min(total, from + CHUNK);
-      const buf = await renderSound(audio.sound, from, to);
-      const planar = new Float32Array(buf.length * 2);
-      planar.set(buf.getChannelData(0), 0);
-      planar.set(buf.getChannelData(1), buf.length);
-      const data = new AudioData({
-        format: 'f32-planar',
-        sampleRate: SAMPLE_RATE,
-        numberOfFrames: buf.length,
-        numberOfChannels: 2,
-        timestamp: Math.round(from * 1000),
-        data: planar,
-      });
-      aenc.encode(data);
-      data.close();
-      onProgress({ ratio: AUDIO_SHARE * (to / total) });
+      prof.mark();
+      await r.prepareFor(t);
+      prof.lap('素材の準備');
+      await r.draw(t);
+      prof.mark();
+      await video.add(n / FPS, 1 / FPS);
+      prof.lap('エンコード（MP4に変換）');
+      est.record(n, performance.now() - f0);
+      if (n % 3 === 0 || n === frames - 1) {
+        onProgress(est.progress());
+        await yieldToScreen(); // 画面が固まらないよう、ときどき画面の更新をはさむ
+      }
     }
-    await aenc.flush();
-    aenc.close();
-    if (failure) throw failure;
+    video.close();
+    audio?.close();
+    onProgress({ ratio: 0.995, remainingSec: 1, label: '仕上げています…' });
+    await output.finalize();
+  } catch (e) {
+    await output.cancel().catch(() => {});
+    throw e;
   }
-
-  const encoder = new VideoEncoder({
-    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-    error: (e) => (failure = e),
-  });
-  encoder.configure({ codec, width: W, height: H, bitrate: BITRATE, framerate: FPS, avc: { format: 'avc' } });
-
-  const frames = Math.ceil((r.timing.total / 1000) * FPS);
-  const began = performance.now();
-  for (let n = 0; n < frames; n++) {
-    if (signal.aborted) {
-      encoder.close();
-      throw abortError();
-    }
-    if (failure) throw failure;
-    const t = (n * 1000) / FPS;
-    await r.prepareFor(t);
-    await r.draw(t);
-    const frame = new VideoFrame(r.canvas, { timestamp: Math.round((n * 1e6) / FPS), duration: Math.round(1e6 / FPS) });
-    encoder.encode(frame, { keyFrame: n % (FPS * 2) === 0 });
-    frame.close();
-    // 変換が追いつくまで少し待つ（メモリを使いすぎないように）
-    while (encoder.encodeQueueSize > 6) await new Promise((ok) => setTimeout(ok, 4));
-    if (n % 5 === 0 || n === frames - 1) {
-      const vr = (n + 1) / frames;
-      const elapsed = (performance.now() - began) / 1000;
-      onProgress({ ratio: AUDIO_SHARE + (1 - AUDIO_SHARE) * vr, remainingSec: n > FPS ? (elapsed / vr) * (1 - vr) : undefined });
-      await new Promise((ok) => setTimeout(ok, 0)); // 画面の更新をはさむ
-    }
-  }
-  await encoder.flush();
-  encoder.close();
-  if (failure) throw failure;
-  muxer.finalize();
   return {
-    blob: new Blob([muxer.target.buffer], { type: 'video/mp4' }),
+    blob: new Blob([output.target.buffer!], { type: 'video/mp4' }),
     mime: 'video/mp4',
     ext: 'mp4',
-    durationSec: r.timing.total / 1000,
+    durationSec: total / 1000,
     audioIncluded: !!audio,
   };
 }
 
-/** MediaRecorder：描いたキャンバスを実時間で録画（変換機能がない端末用） */
+/** 速い書き出し：画面の再生と同じように動かしながら、キャンバスを録画する（MediaRecorder） */
 async function recordRealtime(
   r: Renderer,
   audio: { sound: Soundtrack; ctx: AudioContext } | null,
   onProgress: ExportOptions['onProgress'],
   signal: AbortSignal,
-): Promise<ExportResult> {
+): Promise<Omit<ExportResult, 'stats'>> {
   const types = audio
     ? ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
     : ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { BgmChoice } from './music';
 import type { PhotoShape } from './shape';
+import type { ExportMode, ExportQuality } from './exporter';
 
 /* アプリの設定（この端末だけに保存） */
 
@@ -19,9 +20,13 @@ export interface Settings {
   onThisDay: boolean;
   /** 再生するときの写真の形 */
   photoShape: PhotoShape;
+  /** 動画の書き出し：画質 */
+  exportQuality: ExportQuality;
+  /** 動画の書き出し：方法（きれいに書き出す／再生しながら録画） */
+  exportMode: ExportMode;
 }
 
-const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle' };
+const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode' };
 
 /** 画面の外（起動時の判定など）から設定を読む */
 export const readSetting = <K extends keyof Settings>(key: K): Settings[K] => read()[key];
