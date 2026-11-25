@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { BgmChoice } from './music';
+import { migrateBgm, type BgmChoice } from './music';
 import type { PhotoShape } from './shape';
 import type { ExportMode, ExportQuality } from './exporter';
 import type { VoiceMethod } from './voiceMethod';
@@ -35,7 +35,7 @@ export interface Settings {
   autoLongCaption: boolean;
 }
 
-const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode', exportVideoSound: true, voiceMethod: 'auto', photoSec: 7, autoLongCaption: true };
+const DEFAULTS: Settings = { showDate: true, bgm: 'calm', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode', exportVideoSound: true, voiceMethod: 'auto', photoSec: 7, autoLongCaption: true };
 
 /** 画面の外（起動時の判定など）から設定を読む */
 export const readSetting = <K extends keyof Settings>(key: K): Settings[K] => read()[key];
@@ -43,7 +43,10 @@ const KEY = 'meguru.settings';
 
 function read(): Settings {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+    const s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') } as Settings;
+    // 前の版の BGM の名前（やさしい・明るい・ピアノなど）を、新しい曲に読み替える
+    s.bgm = migrateBgm(s.bgm);
+    return s;
   } catch {
     return DEFAULTS;
   }
