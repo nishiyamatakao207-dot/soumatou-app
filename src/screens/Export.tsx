@@ -3,7 +3,7 @@ import { listDatedItems } from '../data/repository';
 import { describeFilter, filterFromQuery, toMemoryFilter } from '../lib/filter';
 import { buildSlides, type Slide } from '../lib/movie';
 import { useSetting } from '../lib/settings';
-import type { ExportProgress, ExportResult } from '../lib/exporter';
+import type { ExportCaps, ExportProgress, ExportResult } from '../lib/exporter';
 import { BgmPicker } from '../components/BgmPicker';
 import { createExportAudioContext } from '../lib/bgm';
 import { SHAPE_OPTIONS } from '../lib/shape';
@@ -39,11 +39,12 @@ export function Export({ query }: { query: string }) {
   const filter = useMemo(() => filterFromQuery(query), [query]);
   const [slides, setSlides] = useState<Slide[]>();
   const [estimate, setEstimate] = useState<number>();
-  const [caps, setCaps] = useState<{ encode: boolean; high: boolean; realtime: boolean }>();
+  const [caps, setCaps] = useState<ExportCaps>();
   const [quality, setQuality] = useSetting('exportQuality');
   const [mode, setMode] = useSetting('exportMode');
   const [showDate, setShowDate] = useSetting('showDate');
   const [bgm] = useSetting('bgm');
+  const [videoSound, setVideoSound] = useSetting('exportVideoSound');
   const [shape] = useSetting('photoShape');
   const [phase, setPhase] = useState<Phase>({ kind: 'ready' });
   const [notice, setNotice] = useState<string>();
@@ -59,7 +60,8 @@ export function Export({ query }: { query: string }) {
     })();
   }, [filter]);
 
-  const withSound = bgm !== 'none' || !!slides?.some((s) => s.media?.kind === 'video');
+  const hasVideos = !!slides?.some((s) => s.media?.kind === 'video' && !s.media.missing);
+  const withSound = bgm !== 'none' || (videoSound && hasVideos);
   // この端末でできること（変換機能・高画質・録画）
   useEffect(() => {
     let alive = true;
@@ -74,6 +76,14 @@ export function Export({ query }: { query: string }) {
   const effectiveMode = caps && !caps.encode ? 'realtime' : mode;
   const effectiveQuality = caps && !caps.high ? 'standard' : quality;
   const none = !!caps && !caps.encode && !caps.realtime;
+  /** 選んだ書き出し方で、音を入れられるか（確かめ中は null） */
+  const audioOk = !caps ? null : effectiveMode === 'encode' ? caps.encodeAudio : caps.realtimeAudio;
+  const audioWarning =
+    withSound && audioOk === false
+      ? effectiveMode === 'encode' && caps?.realtimeAudio
+        ? `この端末（${caps.device}）では、「きれいに書き出す」だと音（BGM・動画の音）が入りません。音を入れたいときは「速い書き出し」を選んでください。`
+        : `この端末（${caps?.device}）では、音（BGM・動画の音）が入りません。映像だけの動画になります。`
+      : null;
 
   // 書き出し中は画面を消さない。画面を離れたら中止
   useEffect(() => {
@@ -110,6 +120,7 @@ export function Export({ query }: { query: string }) {
         slides,
         showDate,
         bgm,
+        videoSound,
         shape,
         quality: effectiveQuality,
         mode: effectiveMode,
@@ -186,6 +197,12 @@ export function Export({ query }: { query: string }) {
               <input type="checkbox" checked={showDate} onChange={(e) => setShowDate(e.target.checked)} />
               <span>写真の日付を入れる</span>
             </label>
+            {hasVideos && (
+              <label className="switch dark">
+                <input type="checkbox" checked={videoSound} onChange={(e) => setVideoSound(e.target.checked)} />
+                <span>動画素材の元の音（子どもの声など）を入れる</span>
+              </label>
+            )}
             <fieldset className="choice">
               <legend>書き出し方</legend>
               <label className={`choice-row ${caps && !caps.encode ? 'disabled' : ''}`}>
@@ -222,13 +239,18 @@ export function Export({ query }: { query: string }) {
                 </span>
               </label>
             </fieldset>
+            {withSound && !caps && <p className="muted small">この端末で音を入れられるか確かめています…</p>}
+            {audioWarning && <p className="error small export-warn">⚠ {audioWarning}</p>}
             <button className="btn primary big" onClick={start} disabled={!count || !caps || none}>
               🎬 動画を書き出す
             </button>
             <ul className="notes small muted">
               {none && <li className="error">この端末・ブラウザは動画の書き出しに対応していません。</li>}
               <li>書き出し中にアプリを閉じたり、別のアプリに切り替えたり、画面が消えたりすると、止まることがあります。終わるまで、この画面のままにしてください。</li>
-              <li>BGMと、動画に入っている音が一緒に入ります（動画の音の間はBGMが小さくなります）。</li>
+              <li>
+                {bgm === 'none' ? 'BGMなし' : '選んだBGMが最初から最後まで流れ、最後はゆっくり小さくなって終わります'}
+                {hasVideos && (videoSound ? '。動画素材の部分では、元の音が聞こえるようにBGMを小さくします。' : '。動画素材の元の音は入れません。')}
+              </li>
             </ul>
           </>
         )}
@@ -267,9 +289,10 @@ export function Export({ query }: { query: string }) {
             <video className="export-preview" src={phase.url} controls playsInline />
             <p className="muted small">
               できあがり：長さ {mmss(phase.result.durationSec)}・大きさ {(phase.result.blob.size / 1024 / 1024).toFixed(1)}MB
-              {withSound && !phase.result.audioIncluded && '（この端末では音を入れられなかったため、音なしで書き出しました）'}
+
               {phase.result.downgraded && '（この端末では高画質に対応していないため、標準画質で書き出しました）'}
             </p>
+            <ExportCheck result={phase.result} />
             {leftWhileWorking && effectiveMode === 'realtime' && (
               <p className="error small">録画中にアプリから離れたため、動画の一部が止まって見えるかもしれません。おかしければ、もう一度書き出してください。</p>
             )}
@@ -317,5 +340,49 @@ export function Export({ query }: { query: string }) {
         {notice && <p className="error">{notice}</p>}
       </main>
     </div>
+  );
+}
+
+/** できあがった動画の確認結果：BGM・動画素材・元の音が入ったか */
+function ExportCheck({ result }: { result: ExportResult }) {
+  const r = result.report;
+  const shown = r.videos.filter((v) => v.shown).length;
+  const soundIn = r.videos.filter((v) => v.sound === '入った').length;
+  const ok = (b: boolean) => (b ? '✓' : '✕');
+  return (
+    <section className="export-check">
+      <h2 className="label">確認結果</h2>
+      <ul>
+        <li>
+          {r.bgm == null ? '－ BGM：なし' : `${ok(r.bgm)} BGM：${r.bgm ? '入りました' : '入りませんでした'}`}
+        </li>
+        {r.videos.length > 0 && (
+          <li>
+            {ok(shown === r.videos.length)} 動画素材：{r.videos.length}本中{shown}本が映りました
+          </li>
+        )}
+        {r.videos.length > 0 && r.videos.some((v) => v.sound !== '入れない設定') && (
+          <li>
+            {soundIn > 0 ? '✓' : '－'} 動画素材の元の音：{soundIn}本分が入りました
+          </li>
+        )}
+        {r.fileHasAudio === false && r.bgm != null && <li>✕ できあがった動画に音が入っていません</li>}
+      </ul>
+      {result.report.audioNote && <p className="error small">音について：{result.report.audioNote}</p>}
+      {r.videos.length > 0 && (
+        <details>
+          <summary>動画素材ごとの結果</summary>
+          <ul>
+            {r.videos.map((v) => (
+              <li key={v.n}>
+                {v.n}本目：{v.shown ? '映った' : '映らなかった'}（{v.how}
+                {v.note ? `・${v.note}` : ''}）・元の音：{v.sound}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <p className="muted small">端末：{r.device}</p>
+    </section>
   );
 }

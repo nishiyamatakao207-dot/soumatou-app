@@ -24,9 +24,11 @@ export interface Settings {
   exportQuality: ExportQuality;
   /** 動画の書き出し：方法（きれいに書き出す／再生しながら録画） */
   exportMode: ExportMode;
+  /** 動画の書き出し：動画素材の元の音（子どもの声など）を入れる */
+  exportVideoSound: boolean;
 }
 
-const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode' };
+const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode', exportVideoSound: true };
 
 /** 画面の外（起動時の判定など）から設定を読む */
 export const readSetting = <K extends keyof Settings>(key: K): Settings[K] => read()[key];

@@ -1,4 +1,18 @@
-import { ALL_FORMATS, AudioBufferSource, BlobSource, BufferTarget, CanvasSink, CanvasSource, Input, Mp4OutputFormat, Output, canEncodeAudio, canEncodeVideo } from 'mediabunny';
+import {
+  ALL_FORMATS,
+  AudioBufferSink,
+  AudioBufferSource,
+  BlobSource,
+  BufferTarget,
+  CanvasSink,
+  CanvasSource,
+  EncodedPacketSink,
+  Input,
+  Mp4OutputFormat,
+  Output,
+  canEncodeAudio,
+  canEncodeVideo,
+} from 'mediabunny';
 import { loadFile, thumbKey } from '../data/repository';
 import { CAPTION_TOP, drawShaped, type PhotoShape } from './shape';
 import { formatDot } from './format';
@@ -87,6 +101,34 @@ export interface ExportResult {
   /** 高画質を選んだが、この端末では標準画質で書き出した */
   downgraded?: boolean;
   stats: ExportStats;
+  /** できあがった動画の確認結果（画面に出す） */
+  report: ExportReport;
+}
+
+/** 動画素材1本ごとの結果 */
+export interface VideoReport {
+  /** 何本目の動画素材か（1から） */
+  n: number;
+  /** 映ったか */
+  shown: boolean;
+  /** 取り出し方（「順番に取り出す」「1コマずつ探す」など） */
+  how: string;
+  /** うまくいかなかった理由など */
+  note?: string;
+  /** 元の音：入った／音なし／入れない設定／読めなかった */
+  sound: string;
+}
+
+export interface ExportReport {
+  videos: VideoReport[];
+  /** BGM が入ったか（BGMなしのときは null） */
+  bgm: boolean | null;
+  /** できあがったファイルを読み直して確かめた結果 */
+  fileHasAudio: boolean | null;
+  fileHasVideo: boolean | null;
+  /** 音について、気をつけること */
+  audioNote?: string;
+  device: string;
 }
 
 export interface ExportOptions {
@@ -97,6 +139,8 @@ export interface ExportOptions {
   shape: PhotoShape;
   quality: ExportQuality;
   mode: ExportMode;
+  /** 動画素材の元の音（子どもの声など）を入れる */
+  videoSound: boolean;
   /**
    * 再生しながら録画するときに使う音の出口。iPhone ではボタンを押したその場で作る必要があるので、
    * 画面側で createExportAudioContext() を呼んで渡す。
@@ -207,7 +251,17 @@ interface Prepared {
   /** 動画のコマを形に切り抜くための作業用キャンバスと、最後に描いたコマ */
   videoCanvas?: HTMLCanvasElement;
   hasFrame?: boolean;
+  /** 動画：どうしても映せないときに代わりに出す静止画（形に切り抜いたもの） */
+  still?: HTMLCanvasElement;
+  /** 動画：元のファイル（順番に取り出せなかったときに、別の方法へ切り替えるため） */
+  videoBlob?: Blob;
+  /** 動画：最後に合わせた時刻（秒）。<video> で探すときに、同じ時刻を探し直さないため */
+  lastSeek?: number;
+  /** 動画の結果の記録 */
+  vstat?: { how: string; note?: string; tries: number; drawn: number; lit: boolean; checks: number };
   missing: boolean;
+  /** 片付け（あとから足せるように配列） */
+  cleanups: (() => void)[];
   dispose(): void;
 }
 
@@ -328,25 +382,35 @@ function renderBackground(photo: CanvasImageSource | undefined, pw: number, ph: 
   return c;
 }
 
-/** 動画の素材を開く（Mediabunny）。読めない形式なら null */
+/** 動画の素材を開く（Mediabunny）。読めない形式なら理由を返す */
 async function openVideo(blob: Blob) {
+  // 動作確認用：順番に取り出せない端末と同じ動きにする
+  if ((globalThis as { __meguruTestNoDecoder?: boolean }).__meguruTestNoDecoder) return { error: '確認用に使わない設定' } as const;
   try {
     const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
     const track = await input.getPrimaryVideoTrack();
-    if (!track || !(await track.canDecode())) {
+    if (!track) {
       input.dispose?.();
-      return null;
+      return { error: '映像が見つからない' } as const;
     }
-    return { input, track, duration: await input.computeDuration() };
-  } catch {
-    return null;
+    if (!(await track.canDecode())) {
+      const codec = await track.getCodecParameterString().catch(() => null);
+      input.dispose?.();
+      return { error: `この端末では読めない形式（${codec ?? track.codec ?? '不明'}）` } as const;
+    }
+    // iPhone の動画は、最初のコマの時刻が 0 ではないことがある。その分ずらして取り出す
+    const first = await track.getFirstTimestamp().catch(() => 0);
+    return { input, track, first, duration: await input.computeDuration() };
+  } catch (e) {
+    return { error: `開けなかった（${e instanceof Error ? e.name : e}）` } as const;
   }
 }
+type OpenedVideo = Exclude<Awaited<ReturnType<typeof openVideo>>, { error: string }>;
 
-/** 決まった時刻のコマを、頭から順番に取り出す */
-function frameStream(track: NonNullable<Awaited<ReturnType<typeof openVideo>>>['track'], px: number, times: number[]): FrameStream {
-  const sink = new CanvasSink(track, { width: px, height: px, fit: 'cover', poolSize: 3 });
-  const it = sink.canvasesAtTimestamps(times);
+/** 決まった時刻（動画の頭からの秒）のコマを、頭から順番に取り出す */
+function frameStream(v: OpenedVideo, px: number, times: number[]): FrameStream {
+  const sink = new CanvasSink(v.track, { width: px, height: px, fit: 'cover', poolSize: 3 });
+  const it = sink.canvasesAtTimestamps(times.map((t) => v.first + t));
   let done = false;
   return {
     async next() {
@@ -365,18 +429,76 @@ function frameStream(track: NonNullable<Awaited<ReturnType<typeof openVideo>>>['
   };
 }
 
-function htmlVideo(blob: Blob): Promise<{ video: HTMLVideoElement; url: string }> {
+/** 真っ黒（または透明）なコマかどうか。小さく縮めて明るさを調べる */
+const probe = (() => {
+  let ctx: CanvasRenderingContext2D | null = null;
+  return (src: CanvasImageSource): boolean => {
+    try {
+      ctx ??= canvas(8, 8).getContext('2d', { willReadFrequently: true })!;
+      ctx.clearRect(0, 0, 8, 8);
+      ctx.drawImage(src, 0, 0, 8, 8);
+      const d = ctx.getImageData(0, 0, 8, 8).data;
+      for (let k = 0; k < d.length; k += 4) if (d[k + 3] > 0 && Math.max(d[k], d[k + 1], d[k + 2]) > 20) return true;
+      return false;
+    } catch {
+      return true; // 調べられないときは、映っているものとして扱う
+    }
+  };
+})();
+
+/** <video> を置いておく、見えない場所（iPhone は、ページに置いていない動画を読み込まないことがある） */
+function videoHost(): HTMLElement {
+  let host = document.getElementById('export-video-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'export-video-host';
+    host.setAttribute('aria-hidden', 'true');
+    Object.assign(host.style, { position: 'fixed', left: '0', top: '0', width: '2px', height: '2px', overflow: 'hidden', opacity: '0.01', pointerEvents: 'none', zIndex: '-1' });
+    document.body.appendChild(host);
+  }
+  return host;
+}
+
+/**
+ * 動画を <video> で開く。iPhone では、ページに置いて一瞬再生しないと中身を読み込まないので、
+ * 音を消して一瞬だけ再生してから止める。
+ */
+function htmlVideo(blob: Blob): Promise<{ video: HTMLVideoElement; cleanup: () => void }> {
   const url = URL.createObjectURL(blob);
   const video = document.createElement('video');
   video.muted = true;
+  video.defaultMuted = true;
+  video.setAttribute('muted', '');
   video.playsInline = true;
+  video.setAttribute('playsinline', '');
   video.preload = 'auto';
+  Object.assign(video.style, { width: '2px', height: '2px' });
+  videoHost().appendChild(video);
   video.src = url;
+  const cleanup = () => {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    video.remove();
+    URL.revokeObjectURL(url);
+  };
   return new Promise((ok) => {
-    const done = () => ok({ video, url });
-    video.onloadeddata = done;
-    video.onerror = done;
-    setTimeout(done, 8000);
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      video.pause();
+      ok({ video, cleanup });
+    };
+    const timer = setTimeout(done, 8000);
+    video.addEventListener('loadeddata', () => video.readyState >= 2 && done());
+    video.addEventListener('canplay', done);
+    video.addEventListener('error', done);
+    void video
+      .play()
+      .then(() => video.readyState >= 2 && done())
+      .catch(() => {});
   });
 }
 
@@ -386,12 +508,23 @@ function seek(v: HTMLVideoElement, sec: number): Promise<void> {
   if (Math.abs(v.currentTime - target) < 0.012) return Promise.resolve();
   return new Promise((ok) => {
     const done = () => {
-      v.removeEventListener('seeked', done);
+      v.removeEventListener('seeked', onSeeked);
       clearTimeout(t);
       ok();
     };
-    const t = setTimeout(done, 1500);
-    v.addEventListener('seeked', done);
+    // 「合わせ終わった」あと、そのコマが描ける状態になるまで少し待つ（Safari は前のコマが残ることがある）
+    const onSeeked = () => {
+      const rvfc = (v as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number }).requestVideoFrameCallback;
+      if (rvfc) {
+        const t2 = setTimeout(done, 150);
+        rvfc.call(v, () => {
+          clearTimeout(t2);
+          done();
+        });
+      } else done();
+    };
+    const t = setTimeout(done, 2000);
+    v.addEventListener('seeked', onSeeked);
     v.currentTime = target;
   });
 }
@@ -593,7 +726,7 @@ async function prepare(
       drawShaped(shaped.getContext('2d')!, img, w, h, px, shape, slide.key);
       const bg = renderBackground(img, w, h, palette, season);
       if ('close' in img) img.close();
-      return { placement, palette, bg, shaped, caption, missing: false, dispose: () => {} };
+      return { placement, palette, bg, shaped, caption, missing: false, cleanups: [], dispose: () => {} };
     }
   }
 
@@ -603,43 +736,50 @@ async function prepare(
       const thumbBlob = media.hasThumb ? await loadFile(thumbKey(media.id)) : null;
       let palette = DEFAULT_PALETTE;
       let bg: HTMLCanvasElement;
+      let still: HTMLCanvasElement | undefined;
       if (thumbBlob) {
         const t = await toBitmap(thumbBlob);
         palette = extractPalette(t);
         const [bw, bh] = sizeOf(t);
         bg = renderBackground(t, bw, bh, palette, season);
+        // 動画がどうしても映せないときに代わりに出す、最初のコマの静止画
+        still = canvas(px, px);
+        drawShaped(still.getContext('2d')!, t, bw, bh, px, shape, slide.key);
         if ('close' in t) t.close();
       } else bg = renderBackground(undefined, 0, 0, palette, season);
-      const base = { placement, palette, bg, caption, videoCanvas: canvas(px, px), missing: false };
+      const cleanups: (() => void)[] = [];
+      const p: Prepared = {
+        placement,
+        palette,
+        bg,
+        caption,
+        videoCanvas: canvas(px, px),
+        videoBlob: blob,
+        still,
+        missing: false,
+        cleanups,
+        vstat: { how: '', tries: 0, drawn: 0, lit: false, checks: 0 },
+        dispose: () => cleanups.splice(0).forEach((f) => f()),
+      };
 
       // きれいに書き出すとき：頭から順番にコマを取り出す
       if (!opts.realtime && opts.videoTimes) {
         const v = await openVideo(blob);
-        if (v) {
-          const frames = frameStream(v.track, px, opts.videoTimes);
-          return {
-            ...base,
-            frames,
-            dispose: () => {
-              frames.close();
-              v.input.dispose?.();
-            },
-          };
+        if (!('error' in v)) {
+          const frames = frameStream(v, px, opts.videoTimes);
+          p.frames = frames;
+          p.vstat!.how = '順番に取り出す';
+          cleanups.push(() => {
+            frames.close();
+            v.input.dispose?.();
+          });
+          return p;
         }
+        p.vstat!.note = v.error;
       }
       // 再生しながら録画するとき、または順番に取り出せない端末：<video> で
-      const { video, url } = await htmlVideo(blob);
-      return {
-        ...base,
-        video,
-        missing: !video.videoWidth,
-        dispose: () => {
-          video.pause();
-          video.removeAttribute('src');
-          video.load();
-          URL.revokeObjectURL(url);
-        },
-      };
+      await switchToHtmlVideo(p, opts.realtime ? '再生して録画' : '1コマずつ探す');
+      return p;
     }
   }
 
@@ -651,22 +791,34 @@ async function prepare(
     textCircle: renderTextCircle(placement, media ? '画像が見つかりません' : slide.memory.text),
     caption,
     missing: !!media,
+    cleanups: [],
     dispose: () => {},
   };
+}
+
+/** 動画素材を <video> で描くように切り替える */
+async function switchToHtmlVideo(p: Prepared, how: string) {
+  if (!p.videoBlob) return;
+  const { video, cleanup } = await htmlVideo(p.videoBlob);
+  p.cleanups.push(cleanup);
+  p.video = video;
+  p.lastSeek = undefined;
+  p.vstat!.how = how;
+  if (!video.videoWidth) {
+    p.vstat!.note = [p.vstat!.note, `動画を読み込めなかった（${video.error ? `エラー${video.error.code}` : '時間切れ'}）`].filter(Boolean).join('・');
+  }
 }
 
 /** 動画の長さ（秒）。読めなければ null */
 async function videoDuration(blob: Blob): Promise<number | null> {
   const v = await openVideo(blob);
-  if (v) {
+  if (!('error' in v)) {
     v.input.dispose?.();
-    return v.duration;
+    return v.duration - v.first;
   }
-  const { video, url } = await htmlVideo(blob);
+  const { video, cleanup } = await htmlVideo(blob);
   const d = video.duration;
-  video.removeAttribute('src');
-  video.load();
-  URL.revokeObjectURL(url);
+  cleanup();
   return isFinite(d) && d > 0 ? d : null;
 }
 
@@ -681,41 +833,93 @@ interface Clip {
 
 interface Soundtrack {
   bgm: AudioBuffer | null;
+  /** BGM を選んでいたか */
+  bgmWanted: boolean;
   clips: Clip[];
   total: number;
+  /** 動画素材ごとの、元の音の結果（スライドの番号 → 結果） */
+  notes: Map<number, string>;
 }
 
-/** 動画ファイルから音だけを取り出す（音がない・読めないときは null） */
-async function decodeVideoAudio(blob: Blob): Promise<AudioBuffer | null> {
+interface SoundInfo {
+  buf: AudioBuffer | null;
+  /** 画面に出す結果（入った／音なし／読めなかった） */
+  note: string;
+}
+
+/** ほぼ無音か */
+function isSilent(buf: AudioBuffer): boolean {
+  let peak = 0;
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < d.length; i += 64) peak = Math.max(peak, Math.abs(d[i]));
+  }
+  return peak <= 0.002;
+}
+
+/** 動画ファイルから音だけを取り出す。
+ * まずブラウザの音の読み込み（decodeAudioData）で試し、だめなら Mediabunny で音の部分だけを読む。
+ * iPhone の動画（.MOV）は、ブラウザによっては前者で読めないことがある。 */
+async function decodeVideoAudio(blob: Blob): Promise<SoundInfo> {
+  let firstErr = '';
   try {
     const ctx = new OfflineAudioContext(2, 1, SAMPLE_RATE);
     const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
-    // ほぼ無音なら入れない
-    const d = buf.getChannelData(0);
-    let peak = 0;
-    for (let i = 0; i < d.length; i += 64) peak = Math.max(peak, Math.abs(d[i]));
-    return peak > 0.002 ? buf : null;
-  } catch {
-    return null;
+    return isSilent(buf) ? { buf: null, note: '音なし（無音の動画）' } : { buf, note: '入った' };
+  } catch (e) {
+    firstErr = e instanceof Error ? e.name : String(e);
+  }
+  let input: Input | undefined;
+  try {
+    input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+    const track = await input.getPrimaryAudioTrack();
+    if (!track) return { buf: null, note: '音なし（音の入っていない動画）' };
+    if (!(await track.canDecode())) return { buf: null, note: `音を読めなかった（${track.codec ?? '不明な形式'}・${firstErr}）` };
+    const first = await track.getFirstTimestamp().catch(() => 0);
+    const parts: { buffer: AudioBuffer; timestamp: number }[] = [];
+    for await (const w of new AudioBufferSink(track).buffers()) parts.push({ buffer: w.buffer, timestamp: w.timestamp });
+    if (!parts.length) return { buf: null, note: '音なし' };
+    const rate = parts[0].buffer.sampleRate;
+    const end = Math.max(...parts.map((x) => Math.round((x.timestamp - first) * rate) + x.buffer.length));
+    const out = new OfflineAudioContext(2, 1, SAMPLE_RATE).createBuffer(2, Math.max(1, end), rate);
+    for (const x of parts) {
+      const at = Math.max(0, Math.round((x.timestamp - first) * rate));
+      for (let c = 0; c < 2; c++) {
+        const src = x.buffer.getChannelData(Math.min(c, x.buffer.numberOfChannels - 1));
+        out.copyToChannel(src.subarray(0, Math.max(0, Math.min(src.length, out.length - at))), c, at);
+      }
+    }
+    return isSilent(out) ? { buf: null, note: '音なし（無音の動画）' } : { buf: out, note: '入った' };
+  } catch (e) {
+    return { buf: null, note: `音を読めなかった（${firstErr}・${e instanceof Error ? e.name : e}）` };
+  } finally {
+    input?.dispose?.();
   }
 }
 
-async function buildSoundtrack(slides: Slide[], timing: Timing, bgm: BgmChoice): Promise<Soundtrack> {
+async function buildSoundtrack(slides: Slide[], timing: Timing, bgm: BgmChoice, videoSound: boolean): Promise<Soundtrack> {
   const ctx = new OfflineAudioContext(2, 1, SAMPLE_RATE);
   const bgmBuf = await bgmBuffer(bgm, ctx).catch(() => null);
   const clips: Clip[] = [];
+  const notes = new Map<number, string>();
   for (let i = 0; i < slides.length; i++) {
     const m = slides[i].media;
     if (m?.kind !== 'video' || m.missing) continue;
+    if (!videoSound) {
+      notes.set(i, '入れない設定');
+      continue;
+    }
     const blob = await loadFile(m.id);
-    const buf = blob && (await decodeVideoAudio(blob));
+    const info = blob ? await decodeVideoAudio(blob) : { buf: null, note: 'ファイルが見つからない' };
+    notes.set(i, info.note);
+    const buf = info.buf;
     if (!buf) continue;
     // 画面の再生と同じく、スライドが始まったら動画の頭から流す
     const from = timing.start[i];
     const to = Math.min(from + buf.duration * 1000, from + timing.dwell[i] - FADE_MS / 2);
     clips.push({ buffer: buf, from, to });
   }
-  return { bgm: bgmBuf, clips, total: timing.total };
+  return { bgm: bgmBuf, bgmWanted: bgm !== 'none', clips, total: timing.total, notes };
 }
 
 /** 時刻 t（ミリ秒）の BGM の音量：最初はふわっと、最後はゆっくり消える。動画の音の間は小さく */
@@ -804,6 +1008,8 @@ class Renderer {
   private ready = new Map<number, Prepared>();
   private tags = new Map<string, HTMLCanvasElement>();
   private videoSec = new Map<number, number>();
+  /** 動画素材ごとの結果（スライドの番号 → 記録） */
+  readonly vstats = new Map<number, NonNullable<Prepared['vstat']>>();
   timing: Timing;
 
   constructor(
@@ -886,6 +1092,7 @@ class Renderer {
         videoTimes: isVideo && !this.realtime ? this.videoTimes(i) : undefined,
       }).then((r) => {
         this.ready.set(i, r);
+        if (r.vstat) this.vstats.set(i, r.vstat);
         return r;
       });
       this.prepared.set(i, p);
@@ -1007,19 +1214,49 @@ class Renderer {
 
   /** 動画のコマを1つ進めて、形に切り抜く */
   private async advanceVideo(i: number, p: Prepared, t: number, nextStart: number) {
-    if (!p.videoCanvas || p.missing) return;
+    if (!p.videoCanvas || !p.vstat) return;
     const vctx = p.videoCanvas.getContext('2d')!;
     const px = p.videoCanvas.width;
     const key = this.slides[i].key;
+    const st = p.vstat;
     this.prof.lap('写真・字幕を描く');
+    st.tries++;
+    /** 描けたコマを記録し、最初の何コマかは真っ黒でないかを調べる */
+    const drew = (src: CanvasImageSource) => {
+      st.drawn++;
+      p.hasFrame = true;
+      if (!st.lit && st.checks < 12) {
+        st.checks++;
+        if (probe(src)) st.lit = true;
+      }
+    };
     if (p.frames) {
       // 頭から順番に取り出す（速い）
-      const img = await p.frames.next();
+      let img: CanvasImageSource | null = null;
+      let err = '';
+      try {
+        img = await p.frames.next();
+      } catch (e) {
+        err = e instanceof Error ? `${e.name} ${e.message}`.slice(0, 80) : String(e);
+      }
       if (img) {
         drawShaped(vctx, img, px, px, px, this.shape, key);
-        p.hasFrame = true;
+        drew(img);
       }
-    } else if (p.video) {
+      // 取り出せない・真っ黒が続く（端末が対応していない形式など）→ <video> で1コマずつ探す方法に切り替える
+      const blackRun = !st.lit && st.checks >= 12;
+      const emptyRun = !st.lit && st.tries >= 12 && st.drawn === 0;
+      if (err || blackRun || emptyRun) {
+        st.note = err ? `順番に取り出せなかった（${err}）` : blackRun ? '順番に取り出すと真っ黒だった' : '順番に取り出せなかった（コマが出てこない）';
+        p.cleanups.splice(0).forEach((f) => f());
+        p.frames = undefined;
+        p.hasFrame = false;
+        st.lit = false;
+        st.checks = 0;
+        st.drawn = 0;
+        await switchToHtmlVideo(p, '1コマずつ探す（切り替え）');
+      }
+    } else if (p.video && p.video.videoWidth) {
       const v = p.video;
       if (this.realtime) {
         // 再生しながら録画：動画もそのまま再生して、今のコマを描く
@@ -1030,15 +1267,50 @@ class Renderer {
         }
         if (t >= nextStart && !v.paused) v.pause();
       } else {
-        // 順番に取り出せない端末：その時刻のコマを探す（遅い）
-        await seek(v, (Math.min(t, nextStart) - this.timing.start[i]) / 1000);
+        // 順番に取り出せない端末：その時刻のコマを探す（遅いので、動画素材は1秒15コマにして探す回数を半分にする）
+        const target = (Math.min(t, nextStart) - this.timing.start[i]) / 1000;
+        const step = 1 / 15 - 0.001;
+        if (p.lastSeek == null || Math.abs(target - p.lastSeek) >= step || !p.hasFrame) {
+          await seek(v, target);
+          p.lastSeek = target;
+          if (v.readyState >= 2) {
+            drawShaped(vctx, v, v.videoWidth, v.videoHeight, px, this.shape, key);
+            drew(v);
+          }
+        }
+        this.prof.lap('動画素材のコマを取り出す');
+        return;
       }
-      if (v.readyState >= 2 && v.videoWidth) {
+      if (v.readyState >= 2) {
         drawShaped(vctx, v, v.videoWidth, v.videoHeight, px, this.shape, key);
-        p.hasFrame = true;
+        drew(v);
       }
     }
     this.prof.lap('動画素材のコマを取り出す');
+  }
+
+  /** 動画素材ごとの結果（画面に出す） */
+  videoReports(notes: Map<number, string>): VideoReport[] {
+    const out: VideoReport[] = [];
+    this.slides.forEach((sl, i) => {
+      if (sl.media?.kind !== 'video') return;
+      const st = this.vstats.get(i);
+      const shown = !!st && st.drawn > 0 && (st.lit || st.checks === 0);
+      out.push({
+        n: out.length + 1,
+        shown,
+        how: st?.how || '—',
+        note: sl.media.missing
+          ? 'ファイルが見つからない'
+          : !st
+            ? '準備できなかった'
+            : !shown
+              ? `${st.drawn ? '真っ黒だった' : st.note || 'コマを取り出せなかった'}${sl.media.hasThumb ? '→代わりに静止画を入れました' : ''}`
+              : st.note,
+        sound: notes.get(i) ?? '—',
+      });
+    });
+    return out;
   }
 
   /** 季節の粒（画面の SeasonParticles と同じ動き） */
@@ -1139,6 +1411,7 @@ class Renderer {
 
     if (p.shaped) ctx.drawImage(p.shaped, pl.x, pl.y, pl.d, pl.d);
     else if (p.videoCanvas && p.hasFrame) ctx.drawImage(p.videoCanvas, pl.x, pl.y, pl.d, pl.d);
+    else if (p.still && p.vstat && (p.vstat.tries > 2 || p.video)) ctx.drawImage(p.still, pl.x, pl.y, pl.d, pl.d);
     else if (p.textCircle) ctx.drawImage(p.textCircle, pl.x, pl.y, pl.d, pl.d);
 
     // 字幕（日付とコメント）：写真より少し遅れてふわっと
@@ -1232,8 +1505,45 @@ class Estimator {
 
 const canRecordRealtime = () => typeof MediaRecorder !== 'undefined' && 'captureStream' in HTMLCanvasElement.prototype;
 
-/** この端末でできること（書き出す前の画面で使う） */
-export async function exportCapabilities(): Promise<{ encode: boolean; high: boolean; realtime: boolean }> {
+/** iPhone・iPad・Mac の Safari（WebKit） */
+const isAppleWebKit = () => /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Android/.test(navigator.userAgent);
+
+/** 画面に出す端末の名前（例：iPhone・iOS 17.5） */
+export function deviceLabel(): string {
+  const ua = navigator.userAgent;
+  const ios = ua.match(/OS (\d+)_(\d+)(?:_(\d+))? like Mac OS X/);
+  const ver = ua.match(/Version\/(\d+(?:\.\d+)?)/);
+  if (ios) return `${/iPad/.test(ua) ? 'iPad' : 'iPhone'}・iOS ${ios[1]}.${ios[2]}${ver ? `（Safari ${ver[1]}）` : ''}`;
+  if (isAppleWebKit()) return `Mac・Safari ${ver?.[1] ?? ''}`;
+  const ch = ua.match(/Chrome\/(\d+)/);
+  return ch ? `Chrome ${ch[1]}` : 'このブラウザ';
+}
+
+const REALTIME_AUDIO_TYPES = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
+const canRecordRealtimeAudio = () => {
+  try {
+    const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    return canRecordRealtime() && !!AC && 'createMediaStreamDestination' in AC.prototype && REALTIME_AUDIO_TYPES.some((m) => MediaRecorder.isTypeSupported(m));
+  } catch {
+    return false;
+  }
+};
+
+export interface ExportCaps {
+  encode: boolean;
+  high: boolean;
+  realtime: boolean;
+  /** きれいに書き出すとき、音（AAC）を入れられるか */
+  encodeAudio: boolean;
+  /** 速い書き出しのとき、音を入れられるか */
+  realtimeAudio: boolean;
+  /** 音を入れられないときの理由など */
+  audioNote?: string;
+  device: string;
+}
+
+/** この端末でできること（書き出す前の画面で使う）。音は、実際に少しだけ変換してみて確かめる */
+export async function exportCapabilities(): Promise<ExportCaps> {
   const check = async (q: ExportQuality) => {
     try {
       const s = QUALITY[q];
@@ -1242,18 +1552,104 @@ export async function exportCapabilities(): Promise<{ encode: boolean; high: boo
       return false;
     }
   };
-  return { encode: await check('standard'), high: await check('high'), realtime: canRecordRealtime() };
+  const encode = await check('standard');
+  const aac = encode ? await ensureAac() : { ok: false, note: '' };
+  return {
+    encode,
+    high: await check('high'),
+    realtime: canRecordRealtime(),
+    encodeAudio: aac.ok,
+    realtimeAudio: canRecordRealtimeAudio(),
+    audioNote: aac.ok ? undefined : aac.note,
+    device: deviceLabel(),
+  };
 }
 
-/** AAC（音）に変換できるようにする。端末にできなければ、変換の部品（WebAssembly）を読み込む */
-async function ensureAac(): Promise<boolean> {
+/** 少しだけ音（ラの音0.5秒）を変換して MP4 にし、読み直して音が入っているか確かめる */
+async function aacSelfTest(): Promise<string | null> {
   try {
-    if (await canEncodeAudio('aac')) return true;
-    const { registerAacEncoder } = await import('@mediabunny/aac-encoder');
-    registerAacEncoder();
-    return await canEncodeAudio('aac');
+    const ctx = new OfflineAudioContext(2, SAMPLE_RATE / 2, SAMPLE_RATE);
+    const osc = ctx.createOscillator();
+    osc.frequency.value = 440;
+    osc.connect(ctx.destination);
+    osc.start();
+    const tone = await ctx.startRendering();
+    const out = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target: new BufferTarget() });
+    const src = new AudioBufferSource({ codec: 'aac', bitrate: 128_000 });
+    out.addAudioTrack(src);
+    await out.start();
+    await src.add(tone);
+    src.close();
+    await out.finalize();
+    const buf = out.target.buffer;
+    if (!buf || buf.byteLength < 200) return '変換した音が空だった';
+    const input = new Input({ source: new BlobSource(new Blob([buf], { type: 'video/mp4' })), formats: ALL_FORMATS });
+    try {
+      const track = await input.getPrimaryAudioTrack();
+      if (!track) return '変換した動画に音が入っていなかった';
+      const pkt = await new EncodedPacketSink(track).getFirstPacket();
+      if (!pkt || !pkt.byteLength) return '変換した音のデータが空だった';
+    } finally {
+      input.dispose?.();
+    }
+    return null;
+  } catch (e) {
+    return `音の変換に失敗（${e instanceof Error ? `${e.name} ${e.message}`.slice(0, 80) : e}）`;
+  }
+}
+
+let aacState: Promise<{ ok: boolean; note: string }> | null = null;
+let aacWasm = false;
+async function loadWasmAac() {
+  if (aacWasm) return;
+  const { registerAacEncoder } = await import('@mediabunny/aac-encoder');
+  registerAacEncoder();
+  aacWasm = true;
+}
+
+/**
+ * AAC（音）に変換できるようにして、実際に試して確かめる（結果は覚えておく）。
+ * Safari（iPhone）は、端末の音の変換機能がない・あっても MP4 に正しく入らないことがあるので、
+ * いつもアプリに入れた変換の部品（WebAssembly）を使う。ほかのブラウザは端末の機能を先に試す。
+ */
+function ensureAac(): Promise<{ ok: boolean; note: string }> {
+  aacState ??= (async () => {
+    let note = '';
+    if (!isAppleWebKit()) {
+      try {
+        if (await canEncodeAudio('aac')) {
+          const err = await aacSelfTest();
+          if (!err) return { ok: true, note: '端末の機能' };
+          note = err;
+        }
+      } catch {
+        /* 次の方法へ */
+      }
+    }
+    try {
+      await loadWasmAac();
+      if (!(await canEncodeAudio('aac'))) return { ok: false, note: note || '音の変換の部品が使えない' };
+      const err = await aacSelfTest();
+      return err ? { ok: false, note: err } : { ok: true, note: '変換の部品' };
+    } catch (e) {
+      return { ok: false, note: `音の変換の部品を読み込めなかった（${e instanceof Error ? e.name : e}）` };
+    }
+  })();
+  return aacState;
+}
+
+/** できあがった動画を読み直して、映像と音が入っているか確かめる（確かめられないときは null） */
+async function inspectOutput(blob: Blob): Promise<{ video: boolean | null; audio: boolean | null }> {
+  let input: Input | undefined;
+  try {
+    input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+    const [v, a] = await Promise.all([input.getPrimaryVideoTrack(), input.getPrimaryAudioTrack()]);
+    const has = async (t: typeof v | typeof a) => !!t && !!(await new EncodedPacketSink(t).getFirstPacket().catch(() => null));
+    return { video: await has(v), audio: await has(a) };
   } catch {
-    return false;
+    return { video: null, audio: null };
+  } finally {
+    input?.dispose?.();
   }
 }
 
@@ -1282,19 +1678,43 @@ export async function exportMovie(o: ExportOptions): Promise<ExportResult> {
     prof.mark();
     await r.measureVideos();
     prof.lap('素材の準備');
-    const sound = await buildSoundtrack(o.slides, r.timing, o.bgm);
+    const sound = await buildSoundtrack(o.slides, r.timing, o.bgm, o.videoSound);
     prof.lap('音（BGM・動画の音）');
     const withSound = hasSound(sound);
-    let result: Omit<ExportResult, 'stats'>;
+    let result: Omit<ExportResult, 'stats' | 'report'>;
     let method: string;
+    let audioNote: string | undefined;
     if (realtime) {
       method = '再生しながら録画（MediaRecorder）';
-      result = await recordRealtime(r, withSound && o.audioCtx ? { sound, ctx: o.audioCtx } : null, o.onProgress, o.signal);
+      const audioOk = withSound && !!o.audioCtx && canRecordRealtimeAudio();
+      if (withSound && !audioOk) audioNote = 'この端末の録画では音を入れられません';
+      result = await recordRealtime(r, audioOk ? { sound, ctx: o.audioCtx! } : null, o.onProgress, o.signal);
     } else {
-      const audioOk = withSound && (await ensureAac());
-      method = 'WebCodecs（ハードウェア変換）＋ Mediabunny';
-      result = await encodeFrames(r, audioOk ? sound : null, prof, o.onProgress, o.signal);
+      const aac = withSound ? await ensureAac() : { ok: false, note: '' };
+      if (withSound && !aac.ok) audioNote = aac.note;
+      method = `WebCodecs（ハードウェア変換）＋ Mediabunny${aac.ok ? `・音：${aac.note}` : ''}`;
+      result = await encodeFrames(r, aac.ok ? sound : null, prof, o.onProgress, o.signal);
     }
+    // できあがったファイルを読み直して、本当に入っているか確かめる
+    o.onProgress({ ratio: 0.998, remainingSec: 1, label: 'できあがりを確かめています…' });
+    const check = await inspectOutput(result.blob);
+    prof.lap('できあがりの確認');
+    if (result.audioIncluded && check.audio === false) {
+      result.audioIncluded = false;
+      audioNote = 'できあがった動画に音が入っていませんでした';
+    }
+    const bgmIn = sound.bgmWanted ? !!sound.bgm && result.audioIncluded : null;
+    if (sound.bgmWanted && !sound.bgm) audioNote = [audioNote, 'BGMを用意できませんでした'].filter(Boolean).join('・');
+    const notes = new Map(sound.notes);
+    if (!result.audioIncluded) for (const [k, v] of notes) if (v === '入った') notes.set(k, '入らなかった（音なしで書き出し）');
+    const report: ExportReport = {
+      videos: r.videoReports(notes),
+      bgm: bgmIn,
+      fileHasAudio: check.audio,
+      fileHasVideo: check.video,
+      audioNote,
+      device: deviceLabel(),
+    };
     const stats: ExportStats = {
       method,
       quality: `${W}×${H}`,
@@ -1303,7 +1723,8 @@ export async function exportMovie(o: ExportOptions): Promise<ExportResult> {
       parts: Object.fromEntries(Object.entries(prof.parts).map(([k, v]) => [k, Math.round(v / 100) / 10])),
     };
     (globalThis as unknown as { __exportStats?: ExportStats }).__exportStats = stats;
-    return { ...result, downgraded, stats };
+    (globalThis as unknown as { __exportReport?: ExportReport }).__exportReport = report;
+    return { ...result, downgraded, stats, report };
   } finally {
     r.dispose();
   }
@@ -1315,10 +1736,10 @@ async function probeVideoSpeed(r: Renderer, slides: Slide[]): Promise<number | n
   if (i < 0) return null;
   const blob = await loadFile(slides[i].media!.id);
   const v = blob && (await openVideo(blob));
-  if (!v) return null;
+  if (!v || 'error' in v) return null;
   const px = Math.round(place(slides[i].key, LW, LH).d * SCALE);
   const times = r.videoTimes(i).slice(0, 20);
-  const stream = frameStream(v.track, px, times);
+  const stream = frameStream(v, px, times);
   const scratch = canvas(px, px).getContext('2d')!;
   const t0 = performance.now();
   let n = 0;
@@ -1341,7 +1762,7 @@ async function encodeFrames(
   prof: Prof,
   onProgress: ExportOptions['onProgress'],
   signal: AbortSignal,
-): Promise<Omit<ExportResult, 'stats'>> {
+): Promise<Omit<ExportResult, 'stats' | 'report'>> {
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target: new BufferTarget() });
   // ハードウェアでの変換を優先する（使えない環境では、端末に任せる）
   const accel = (await canEncodeVideo('avc', { width: W, height: H, bitrate: BITRATE, hardwareAcceleration: 'prefer-hardware' }).catch(() => false))
@@ -1422,9 +1843,9 @@ async function recordRealtime(
   audio: { sound: Soundtrack; ctx: AudioContext } | null,
   onProgress: ExportOptions['onProgress'],
   signal: AbortSignal,
-): Promise<Omit<ExportResult, 'stats'>> {
+): Promise<Omit<ExportResult, 'stats' | 'report'>> {
   const types = audio
-    ? ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
+    ? REALTIME_AUDIO_TYPES
     : ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
   const mime = types.find((m) => MediaRecorder.isTypeSupported(m));
   if (!mime) throw new Error('この端末では動画を書き出せません');
