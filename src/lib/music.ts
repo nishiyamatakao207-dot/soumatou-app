@@ -18,21 +18,32 @@
 import { seeded } from './movie';
 import { db } from '../data/db';
 
-export type BgmMood = 'calm' | 'warm' | 'dream' | 'nature';
+export type BgmMood = 'calm' | 'warm' | 'dream' | 'nature' | 'waku' | 'koro' | 'pyon';
+/** BGM を選ぶ画面での分け方 */
+export type BgmGroup = 'calm' | 'pop' | 'other';
 export type BgmChoice = 'none' | BgmMood | 'custom';
 
-export const BGM_OPTIONS: { value: BgmChoice; label: string; note: string }[] = [
-  { value: 'none', label: 'なし', note: '' },
-  { value: 'calm', label: 'やすらぎ', note: 'やさしいタッチのピアノ。静かに思い出を眺めるときに' },
-  { value: 'warm', label: 'ぬくもり', note: 'アコースティックギターの指弾き。家族の日常に' },
-  { value: 'dream', label: 'ゆめごこち', note: 'ふんわり包むパッドとストリングス、ときどきハープ' },
-  { value: 'nature', label: '自然の音', note: '寄せては返す波と小川のせせらぎに、やさしい音楽を重ねて' },
-  { value: 'custom', label: '自分の曲', note: 'スマホの中の音楽ファイル' },
+export const BGM_OPTIONS: { value: BgmChoice; label: string; note: string; group: BgmGroup }[] = [
+  { value: 'calm', label: 'やすらぎ', note: 'やさしいタッチのピアノ。静かに思い出を眺めるときに', group: 'calm' },
+  { value: 'warm', label: 'ぬくもり', note: 'アコースティックギターの指弾き。家族の日常に', group: 'calm' },
+  { value: 'dream', label: 'ゆめごこち', note: 'ふんわり包むパッドとストリングス、ときどきハープ', group: 'calm' },
+  { value: 'nature', label: '自然の音', note: '寄せては返す波と小川のせせらぎに、やさしい音楽を重ねて', group: 'calm' },
+  { value: 'waku', label: 'わくわく', note: 'ウクレレと手拍子の、明るく楽しい曲', group: 'pop' },
+  { value: 'koro', label: 'ころころ', note: 'マリンバと木琴の、はずむようなかわいい曲', group: 'pop' },
+  { value: 'pyon', label: 'ぴょんぴょん', note: '口笛と軽いリズムの、楽しいお出かけ風の曲', group: 'pop' },
+  { value: 'none', label: 'なし', note: '', group: 'other' },
+  { value: 'custom', label: '自分の曲', note: 'スマホの中の音楽ファイル', group: 'other' },
 ];
+export const BGM_GROUPS: { value: BgmGroup; label: string }[] = [
+  { value: 'calm', label: 'おちついた' },
+  { value: 'pop', label: 'ポップ' },
+  { value: 'other', label: 'そのほか' },
+];
+const MOODS: BgmMood[] = ['calm', 'warm', 'dream', 'nature', 'waku', 'koro', 'pyon'];
 
 /** 前の版の曲の名前を、近い雰囲気の新しい曲に読み替える（設定に残っている値のため） */
 export function migrateBgm(v: string): BgmChoice {
-  if (v === 'none' || v === 'custom' || v === 'calm' || v === 'warm' || v === 'dream' || v === 'nature') return v;
+  if (v === 'none' || v === 'custom' || (MOODS as string[]).includes(v)) return v as BgmChoice;
   if (v === 'guitar' || v === 'bright') return 'warm';
   return 'calm'; // gentle（オルゴール）・piano など
 }
@@ -66,6 +77,10 @@ const SONGS: Record<BgmMood, Song> = {
   warm: { bpm: 72, bars: 16, reverbSec: 2.4, wet: 0.24, lowpass: 3800 },
   dream: { bpm: 60, bars: 16, reverbSec: 4.5, wet: 0.5, lowpass: 3000 },
   nature: { bpm: 60, bars: 16, reverbSec: 4, wet: 0.4, lowpass: 3200 },
+  // ポップ：明るく速め。高い音は抑えたまま（少しだけ明るめのフィルター）、残響は短め
+  waku: { bpm: 108, bars: 16, reverbSec: 1.6, wet: 0.16, lowpass: 4500 },
+  koro: { bpm: 112, bars: 16, reverbSec: 1.8, wet: 0.18, lowpass: 4500 },
+  pyon: { bpm: 116, bars: 16, reverbSec: 1.6, wet: 0.16, lowpass: 4500 },
 };
 
 /** 曲のひと回りの長さ（秒） */
@@ -547,13 +562,311 @@ function performNature(ctx: BaseAudioContext, dry: AudioNode, wet: AudioNode) {
   performDream(ctx, music, wet, 0.75);
 }
 
+// ---------------------------------------------------------------- ポップの曲の部品（木のあたたかい音が中心）
+
+/**
+ * マリンバ・木琴：サイン波の基音に、マリンバは4倍、木琴は3倍の音（その楽器らしい響き）を少し足す。
+ * 叩いた瞬間も少しだけなだらかに（4ミリ秒）して、カツンとしすぎないように。高い倍音は早く消す
+ */
+function malletNote(ctx: BaseAudioContext, out: AudioNode, midi: number, at: number, vel: number, kind: 'marimba' | 'xylo' = 'marimba') {
+  const t = Math.max(0, at);
+  const f = hz(midi);
+  const decay = kind === 'marimba' ? Math.max(0.25, 0.9 - (midi - 48) * 0.022) : Math.max(0.18, 0.45 - (midi - 60) * 0.01);
+  const parts: [number, number, number][] = kind === 'marimba' ? [[1, 1, 1], [4, 0.18, 0.25]] : [[1, 1, 1], [3, 0.22, 0.3]];
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(vel, t + 0.004);
+  g.gain.setTargetAtTime(0, t + 0.004, decay);
+  g.connect(out);
+  for (const [mul, amp, dk] of parts) {
+    if (f * mul > 4000) continue; // 高すぎる響きは入れない
+    const o = ctx.createOscillator();
+    o.frequency.value = f * mul;
+    const pg = ctx.createGain();
+    pg.gain.setValueAtTime(amp, t);
+    pg.gain.setTargetAtTime(0, t, decay * dk);
+    o.connect(pg).connect(g);
+    o.start(t);
+    o.stop(t + decay * 6);
+  }
+}
+
+/** ぽんっと弾むやわらかい低音（三角波を短く） */
+function popBass(ctx: BaseAudioContext, out: AudioNode, midi: number, at: number, len: number, vel: number) {
+  const t = Math.max(0, at);
+  const o = ctx.createOscillator();
+  o.type = 'triangle';
+  o.frequency.value = hz(midi);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 600;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(vel, t + 0.01);
+  g.gain.setTargetAtTime(vel * 0.4, t + 0.01, 0.12);
+  g.gain.setTargetAtTime(0, t + len, 0.06);
+  o.connect(lp).connect(g).connect(out);
+  o.start(t);
+  o.stop(t + len + 0.5);
+}
+
+/** 打楽器に使う雑音（毎回同じになる） */
+function noiseBuf(ctx: BaseAudioContext, sec: number, seed: string) {
+  const b = ctx.createBuffer(1, Math.floor(ctx.sampleRate * sec), ctx.sampleRate);
+  const d = b.getChannelData(0);
+  const r = seeded(seed);
+  for (let i = 0; i < d.length; i++) d[i] = r() * 2 - 1;
+  return b;
+}
+
+/** 打楽器：手拍子・シェイカー・やわらかいキック・木の「コン」。どれも高い音を抑えて小さめに */
+function percussion(ctx: BaseAudioContext, out: AudioNode) {
+  const noise = noiseBuf(ctx, 0.4, 'perc');
+  const burst = (t: number, freq: number, q: number, vel: number, decay: number, lp = 2600) => {
+    const s = ctx.createBufferSource();
+    s.buffer = noise;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = freq;
+    bp.Q.value = q;
+    const l = ctx.createBiquadFilter();
+    l.type = 'lowpass';
+    l.frequency.value = lp;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vel, t + 0.003);
+    g.gain.setTargetAtTime(0, t + 0.003, decay);
+    s.connect(bp).connect(l).connect(g).connect(out);
+    s.start(t);
+    s.stop(t + decay * 8);
+  };
+  return {
+    /** 手拍子：何人かが少しずれて叩いたように、3回重ねる */
+    clap(at: number, vel = 0.22) {
+      const t = Math.max(0, at);
+      burst(t, 1100, 0.9, vel * 0.7, 0.012, 2000);
+      burst(t + 0.011, 1250, 0.9, vel * 0.7, 0.012, 2000);
+      burst(t + 0.022, 1150, 0.8, vel, 0.06, 2000);
+    },
+    shaker(at: number, vel = 0.05) {
+      burst(Math.max(0, at), 2300, 1.2, vel, 0.025, 3000);
+    },
+    /** やわらかいキック（低い「トン」） */
+    kick(at: number, vel = 0.35) {
+      const t = Math.max(0, at);
+      const o = ctx.createOscillator();
+      o.frequency.setValueAtTime(130, t);
+      o.frequency.exponentialRampToValueAtTime(55, t + 0.09);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vel, t + 0.006);
+      g.gain.setTargetAtTime(0, t + 0.006, 0.07);
+      o.connect(g).connect(out);
+      o.start(t);
+      o.stop(t + 0.5);
+    },
+    /** 木の「コン」（ウッドブロックのような、まるい音） */
+    wood(at: number, vel = 0.12) {
+      malletNote(ctx, out, 79, at, vel, 'xylo');
+    },
+  };
+}
+
+/**
+ * 口笛：サイン波に、少し遅れてかかるゆれ（ビブラート）と、息の音をほんの少し。
+ * 音と音の間はなめらかにすべらせる（口笛らしく）
+ */
+function whistlePhrase(ctx: BaseAudioContext, out: AudioNode, notes: { t: number; midi: number; dur: number; vel: number }[]) {
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 2600;
+  lp.connect(out);
+  const breathNoise = noiseBuf(ctx, 2, 'breath');
+  let prev: number | null = null;
+  for (const n of notes) {
+    const t = Math.max(0, n.t);
+    const f = hz(n.midi);
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    const from = prev != null && Math.abs(prev - n.midi) <= 7 ? hz(prev) : f;
+    o.frequency.setValueAtTime(from, t);
+    o.frequency.setTargetAtTime(f, t, 0.025);
+    const vib = ctx.createOscillator();
+    vib.frequency.value = 5.4;
+    const vibAmt = ctx.createGain();
+    vibAmt.gain.setValueAtTime(0, t);
+    vibAmt.gain.linearRampToValueAtTime(n.dur > 0.4 ? 14 : 4, t + Math.min(0.3, n.dur));
+    vib.connect(vibAmt).connect(o.detune);
+    const g = ctx.createGain();
+    const end = t + n.dur * 0.92;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(n.vel, t + 0.035);
+    g.gain.setValueAtTime(n.vel * 0.9, Math.max(t + 0.04, end - 0.05));
+    g.gain.linearRampToValueAtTime(0, end + 0.06);
+    o.connect(g).connect(lp);
+    // 息の音（とても小さく、音の高さのまわりだけ）
+    const b = ctx.createBufferSource();
+    b.buffer = breathNoise;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = f;
+    bp.Q.value = 6;
+    const bg = ctx.createGain();
+    bg.gain.setValueAtTime(0, t);
+    bg.gain.linearRampToValueAtTime(n.vel * 0.12, t + 0.03);
+    bg.gain.linearRampToValueAtTime(0, end + 0.05);
+    b.connect(bp).connect(bg).connect(lp);
+    for (const x of [o, vib, b] as AudioScheduledSourceNode[]) {
+      x.start(t);
+      x.stop(end + 0.2);
+    }
+    prev = n.midi;
+  }
+}
+
+// ---------------------------------------------------------------- わくわく（ウクレレと手拍子）
+
+/** ハ長調・108拍。ウクレレをやさしくかき鳴らし、2拍目と4拍目に手拍子。旋律もウクレレで */
+const WAKU = [
+  { uke: [67, 60, 64, 72], root: 48, mel: [[0, 72, 1], [1, 76, 1], [2, 79, 1.5], [3.5, 76, 0.5]] as N[] }, // C
+  { uke: [67, 62, 67, 71], root: 43, mel: [[0, 74, 1], [1, 71, 1], [2, 74, 2]] as N[] }, // G
+  { uke: [69, 60, 64, 69], root: 45, mel: [[0, 72, 1], [1, 76, 1], [2, 79, 1], [3, 76, 1]] as N[] }, // Am
+  { uke: [69, 60, 65, 69], root: 41, mel: [[0, 77, 1.5], [1.5, 76, 0.5], [2, 74, 2]] as N[] }, // F
+  { uke: [67, 60, 64, 72], root: 48, mel: [[0, 72, 0.5], [0.5, 74, 0.5], [1, 76, 1], [2, 79, 1], [3, 76, 1]] as N[] }, // C
+  { uke: [67, 62, 67, 71], root: 43, mel: [[0, 74, 1], [1, 79, 1], [2, 77, 1], [3, 74, 1]] as N[] }, // G
+  { uke: [69, 60, 65, 69], root: 41, mel: [[0, 72, 1], [1, 74, 1], [2, 76, 1], [3, 77, 1]] as N[] }, // F
+  { uke: [67, 62, 67, 71], root: 43, mel: [[0, 76, 1], [1, 74, 1], [2, 72, 2]] as N[] }, // G → C
+];
+
+function performWaku(ctx: BaseAudioContext, dry: AudioNode, wet: AudioNode) {
+  const beat = 60 / SONGS.waku.bpm;
+  const bar = beat * 4;
+  const rnd = seeded('waku');
+  const uke = sampler(ctx, (m) => pluckBuffer(ctx, m, 0.28, 1.8));
+  const lead = sampler(ctx, (m) => pluckBuffer(ctx, m, 0.4, 2.2));
+  const both = ctx.createGain();
+  both.connect(dry);
+  both.connect(wet);
+  const perc = percussion(ctx, dry);
+  const human = () => (rnd() - 0.5) * 0.012;
+  // かき鳴らし：下・下上・上下上（よくある明るいリズム）。上はやさしく、弦を逆の順に
+  const strum: [number, 'd' | 'u', number][] = [[0, 'd', 0.2], [1, 'd', 0.15], [1.5, 'u', 0.1], [2.5, 'u', 0.1], [3, 'd', 0.15], [3.5, 'u', 0.1]];
+  for (let pass = 0; pass < 2; pass++) {
+    WAKU.forEach((b, i) => {
+      const t0 = (pass * WAKU.length + i) * bar;
+      for (const [at, dir, vel] of strum) {
+        const order = dir === 'd' ? b.uke : [...b.uke].reverse();
+        order.forEach((m, k) => uke(both, m, t0 + at * beat + k * 0.014 + human(), vel * (0.9 + rnd() * 0.2), -0.2 + k * 0.1));
+      }
+      popBass(ctx, dry, b.root, t0 + human(), beat * 1.5, 0.22);
+      popBass(ctx, dry, b.root + 7, t0 + 2 * beat + human(), beat * 1.5, 0.18);
+      perc.clap(t0 + beat + human(), 0.16);
+      perc.clap(t0 + 3 * beat + human(), 0.16);
+      if (pass === 1) for (let k = 0; k < 8; k++) perc.shaker(t0 + k * beat * 0.5, k % 2 ? 0.04 : 0.025);
+      // 旋律：1回目は少し低く、2回目はそのままの高さで
+      for (const [at, m] of b.mel) lead(both, pass ? m : m - 12, t0 + at * beat + human(), pass ? 0.34 : 0.4, 0.15);
+    });
+  }
+}
+
+// ---------------------------------------------------------------- ころころ（マリンバと木琴）
+
+/** ヘ長調・112拍。マリンバが「ころころ」と分散和音、木琴が旋律。軽いキックとシェイカー */
+const KORO = [
+  { ch: [53, 57, 60, 65], root: 41, mel: [[0, 77, 0.5], [0.5, 77, 0.5], [1, 81, 1], [2, 77, 1], [3, 72, 1]] as N[] }, // F
+  { ch: [52, 55, 60, 64], root: 48, mel: [[0, 76, 1], [1, 79, 1], [2, 76, 1], [3, 72, 1]] as N[] }, // C
+  { ch: [53, 57, 62, 65], root: 50, mel: [[0, 74, 0.5], [0.5, 77, 0.5], [1, 81, 1], [2, 77, 1.5], [3.5, 74, 0.5]] as N[] }, // Dm
+  { ch: [53, 58, 62, 65], root: 46, mel: [[0, 74, 1], [1, 77, 1], [2, 70, 2]] as N[] }, // B♭
+  { ch: [53, 57, 60, 65], root: 41, mel: [[0, 72, 0.5], [0.5, 74, 0.5], [1, 77, 1], [2, 81, 1], [3, 79, 1]] as N[] }, // F
+  { ch: [52, 55, 60, 64], root: 48, mel: [[0, 77, 1], [1, 76, 1], [2, 72, 2]] as N[] }, // C
+  { ch: [53, 58, 62, 65], root: 46, mel: [[0, 74, 1], [1, 77, 1], [2, 79, 1], [3, 81, 1]] as N[] }, // B♭
+  { ch: [52, 55, 58, 64], root: 48, mel: [[0, 79, 1], [1, 76, 1], [2, 77, 2]] as N[] }, // C7 → F
+];
+
+function performKoro(ctx: BaseAudioContext, dry: AudioNode, wet: AudioNode) {
+  const beat = 60 / SONGS.koro.bpm;
+  const bar = beat * 4;
+  const rnd = seeded('koro');
+  const both = ctx.createGain();
+  both.connect(dry);
+  both.connect(wet);
+  // 木琴（旋律）は、高い音をさらに少し抑える
+  const xyloLp = ctx.createBiquadFilter();
+  xyloLp.type = 'lowpass';
+  xyloLp.frequency.value = 2400;
+  xyloLp.connect(both);
+  const perc = percussion(ctx, dry);
+  const human = () => (rnd() - 0.5) * 0.01;
+  // マリンバの「ころころ」：8分音符で上がったり下がったり
+  const pat = [0, 1, 2, 3, 2, 1, 2, 3];
+  for (let pass = 0; pass < 2; pass++) {
+    KORO.forEach((b, i) => {
+      const t0 = (pass * KORO.length + i) * bar;
+      pat.forEach((k, s) => malletNote(ctx, both, b.ch[k] + (pass && s % 4 === 3 ? 12 : 0), t0 + s * beat * 0.5 + human(), (s % 2 ? 0.16 : 0.22) * (0.9 + rnd() * 0.2)));
+      malletNote(ctx, dry, b.root, t0 + human(), 0.3);
+      malletNote(ctx, dry, b.root + 7, t0 + 2 * beat + human(), 0.24);
+      perc.kick(t0, 0.3);
+      perc.kick(t0 + 2 * beat, 0.26);
+      perc.wood(t0 + beat * 3.5, 0.06);
+      for (let k = 0; k < 8; k++) perc.shaker(t0 + k * beat * 0.5, k % 2 ? 0.035 : 0.02);
+      for (const [at, m] of b.mel) malletNote(ctx, xyloLp, m, t0 + at * beat + human(), (pass ? 0.3 : 0.26) * (0.9 + rnd() * 0.2), 'xylo');
+    });
+  }
+}
+
+// ---------------------------------------------------------------- ぴょんぴょん（口笛と軽いリズム）
+
+/** ト長調・116拍。口笛の旋律に、ウクレレの軽い刻み・はずむ低音・やわらかいキックと「コン」 */
+const PYON = [
+  { ch: [62, 67, 71], root: 43, mel: [[0, 74, 0.5], [0.5, 79, 0.5], [1, 79, 1], [2, 81, 0.5], [2.5, 79, 0.5], [3, 74, 1]] as N[] }, // G
+  { ch: [64, 67, 71], root: 40, mel: [[0, 76, 1], [1, 79, 0.5], [1.5, 76, 0.5], [2, 71, 2]] as N[] }, // Em
+  { ch: [64, 67, 72], root: 48, mel: [[0, 72, 0.5], [0.5, 76, 0.5], [1, 79, 1], [2, 81, 1], [3, 79, 1]] as N[] }, // C
+  { ch: [62, 66, 69], root: 50, mel: [[0, 78, 1.5], [1.5, 76, 0.5], [2, 74, 2]] as N[] }, // D
+  { ch: [62, 67, 71], root: 43, mel: [[0, 74, 0.5], [0.5, 79, 0.5], [1, 83, 1], [2, 81, 0.5], [2.5, 79, 0.5], [3, 76, 1]] as N[] }, // G
+  { ch: [64, 67, 71], root: 40, mel: [[0, 79, 1], [1, 76, 1], [2, 74, 1], [3, 71, 1]] as N[] }, // Em
+  { ch: [64, 67, 72], root: 48, mel: [[0, 72, 1], [1, 76, 1], [2, 81, 1], [3, 79, 1]] as N[] }, // C
+  { ch: [62, 66, 72], root: 50, mel: [[0, 78, 1], [1, 81, 1], [2, 79, 2]] as N[] }, // D7 → G
+];
+
+function performPyon(ctx: BaseAudioContext, dry: AudioNode, wet: AudioNode) {
+  const beat = 60 / SONGS.pyon.bpm;
+  const bar = beat * 4;
+  const rnd = seeded('pyon');
+  const chop = sampler(ctx, (m) => pluckBuffer(ctx, m, 0.3, 0.9));
+  const both = ctx.createGain();
+  both.connect(dry);
+  both.connect(wet);
+  const perc = percussion(ctx, dry);
+  const human = () => (rnd() - 0.5) * 0.01;
+  const notes: { t: number; midi: number; dur: number; vel: number }[] = [];
+  for (let pass = 0; pass < 2; pass++) {
+    PYON.forEach((b, i) => {
+      const t0 = (pass * PYON.length + i) * bar;
+      // 裏拍で、ウクレレを短く「チャッ」と（スキップしているような弾み）
+      for (const at of [0.5, 1.5, 2.5, 3.5]) b.ch.forEach((m, k) => chop(both, m, t0 + at * beat + k * 0.01 + human(), 0.13, 0, t0 + (at + 0.35) * beat));
+      // はずむ低音：1・2・3・4拍に、根音と5度を行ったり来たり
+      [0, 7, 12, 7].forEach((d, k) => popBass(ctx, dry, b.root + d, t0 + k * beat + human(), beat * 0.6, k % 2 ? 0.16 : 0.2));
+      perc.kick(t0, 0.28);
+      perc.kick(t0 + 2 * beat, 0.24);
+      perc.wood(t0 + beat, 0.07);
+      perc.wood(t0 + 3 * beat, 0.07);
+      if (pass === 1) for (let k = 0; k < 8; k++) perc.shaker(t0 + k * beat * 0.5, k % 2 ? 0.03 : 0.018);
+      for (const [at, m, d] of b.mel) notes.push({ t: t0 + at * beat + human(), midi: m, dur: d * beat, vel: pass ? 0.13 : 0.12 });
+    });
+  }
+  whistlePhrase(ctx, both, notes);
+}
+
 // ---------------------------------------------------------------- 曲を作る
 
 function perform(ctx: BaseAudioContext, dry: AudioNode, wet: AudioNode, mood: BgmMood) {
   if (mood === 'calm') return performCalm(ctx, dry, wet);
   if (mood === 'warm') return performWarm(ctx, dry, wet);
   if (mood === 'dream') return performDream(ctx, dry, wet);
-  return performNature(ctx, dry, wet);
+  if (mood === 'nature') return performNature(ctx, dry, wet);
+  if (mood === 'waku') return performWaku(ctx, dry, wet);
+  if (mood === 'koro') return performKoro(ctx, dry, wet);
+  return performPyon(ctx, dry, wet);
 }
 
 const loopCache = new Map<BgmMood, Promise<AudioBuffer>>();
@@ -665,7 +978,7 @@ async function cleanupOld() {
   if (cleaned) return;
   cleaned = true;
   try {
-    const keep = new Set((['calm', 'warm', 'dream', 'nature'] as BgmMood[]).map(cacheId));
+    const keep = new Set(MOODS.map(cacheId));
     const old = (await db.files.where('id').startsWith('bgm:cache:').primaryKeys()).filter((k) => !keep.has(k as string));
     if (old.length) await db.files.bulkDelete(old);
   } catch {

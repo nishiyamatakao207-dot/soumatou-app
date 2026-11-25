@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { BgmPlayer, saveCustomBgm } from '../lib/bgm';
-import { BGM_OPTIONS, warmUp, type BgmChoice } from '../lib/music';
+import { BGM_GROUPS, BGM_OPTIONS, warmUp, type BgmChoice } from '../lib/music';
 import { useSetting } from '../lib/settings';
 
 /** BGM を選ぶ（再生前の画面と、動画にする画面で使う）。選んだ曲は試聴できる */
@@ -81,13 +81,19 @@ export function BgmPicker({ dark }: { dark?: boolean }) {
           </button>
         )}
       </div>
-      <div className="chips">
-        {BGM_OPTIONS.map((o) => (
-          <button key={o.value} type="button" className={`chip ${bgm === o.value ? 'on' : ''}`} onClick={() => choose(o.value)} disabled={busy}>
-            {o.label}
-          </button>
-        ))}
-      </div>
+      {/* 「おちついた」「ポップ」「そのほか（なし・自分の曲）」に分けて並べる */}
+      {BGM_GROUPS.map((g) => (
+        <div key={g.value} className="bgm-group">
+          {g.value !== 'other' && <span className="bgm-group-label">{g.label}</span>}
+          <div className="chips">
+            {BGM_OPTIONS.filter((o) => o.group === g.value).map((o) => (
+              <button key={o.value} type="button" className={`chip ${bgm === o.value ? 'on' : ''}`} onClick={() => choose(o.value)} disabled={busy}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
       {bgm === 'custom' && customName ? (
         <p className="bgm-note">
           ♪ {customName}{' '}
