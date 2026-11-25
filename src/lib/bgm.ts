@@ -137,6 +137,23 @@ export function createExportAudioContext(): AudioContext | undefined {
  * iPhone では、ボタンを押したその場で音を「起こす」必要があるので、
  * new したらすぐ（同じタップの中で）unlock() を呼ぶ。
  */
+const players = new Set<BgmPlayer>();
+
+/**
+ * 声で入力する前に呼ぶ：鳴っている BGM・動画・音をすべて止める。
+ * 再生画面（今日のひとめぐりなど）にも知らせて、一時停止にしてもらう。止めた数を返す。
+ */
+export function pauseAllMedia(): number {
+  let n = 0;
+  for (const p of players) if (p.state === 'running') (p.pause(), n++);
+  document.querySelectorAll('video, audio').forEach((m) => {
+    const el = m as HTMLMediaElement;
+    if (!el.paused) (el.pause(), n++);
+  });
+  window.dispatchEvent(new Event('meguru-pause-media'));
+  return n;
+}
+
 export class BgmPlayer {
   private ctx: AudioContext;
   private gain: GainNode;
@@ -155,6 +172,7 @@ export class BgmPlayer {
     this.gain = this.ctx.createGain();
     this.gain.gain.value = 0;
     this.gain.connect(this.ctx.destination);
+    players.add(this);
   }
 
   unlock() {
@@ -226,6 +244,7 @@ export class BgmPlayer {
   }
 
   dispose() {
+    players.delete(this);
     if (!this.stopped) releaseAudioOutput();
     this.stopped = true;
     try {

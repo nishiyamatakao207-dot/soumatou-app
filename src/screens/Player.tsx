@@ -192,6 +192,12 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
     window.addEventListener('keydown', on);
     return () => window.removeEventListener('keydown', on);
   }, [next, back]);
+  // 声で入力を始めたら、再生を一時停止する（聞いている途中に音が鳴ると、iPhone では音声入力が止まるため）
+  useEffect(() => {
+    const on = () => setPaused(true);
+    window.addEventListener('meguru-pause-media', on);
+    return () => window.removeEventListener('meguru-pause-media', on);
+  }, []);
 
   // ---- BGM：一時停止・消音・終わりに合わせる ----
   useEffect(() => () => bgm.current?.dispose(), []);
