@@ -1513,7 +1513,12 @@ export function deviceLabel(): string {
   const ua = navigator.userAgent;
   const ios = ua.match(/OS (\d+)_(\d+)(?:_(\d+))? like Mac OS X/);
   const ver = ua.match(/Version\/(\d+(?:\.\d+)?)/);
-  if (ios) return `${/iPad/.test(ua) ? 'iPad' : 'iPhone'}・iOS ${ios[1]}.${ios[2]}${ver ? `（Safari ${ver[1]}）` : ''}`;
+  if (ios) {
+    // iOS 26 からは、端末の名前に書かれる iOS の数字が「18.7」のまま止まり、Safari の数字が iOS と同じになった
+    const frozen = ver && Number(ver[1].split('.')[0]) >= 26;
+    const os = frozen ? ver![1] : `${ios[1]}.${ios[2]}`;
+    return `${/iPad/.test(ua) ? 'iPad' : 'iPhone'}・iOS ${os}（Safari ${ver?.[1] ?? '不明'}）`;
+  }
   if (isAppleWebKit()) return `Mac・Safari ${ver?.[1] ?? ''}`;
   const ch = ua.match(/Chrome\/(\d+)/);
   return ch ? `Chrome ${ch[1]}` : 'このブラウザ';

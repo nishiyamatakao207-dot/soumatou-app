@@ -286,7 +286,8 @@ export function Export({ query }: { query: string }) {
 
         {phase.kind === 'done' && (
           <section className="export-done">
-            <video className="export-preview" src={phase.url} controls playsInline />
+            {/* 「#t=0.1」：iPhone で、再生前から最初の場面が見えるようにする（何もしないと真っ黒のまま） */}
+            <video className="export-preview" src={`${phase.url}#t=0.1`} preload="metadata" controls playsInline />
             <p className="muted small">
               できあがり：長さ {mmss(phase.result.durationSec)}・大きさ {(phase.result.blob.size / 1024 / 1024).toFixed(1)}MB
 
