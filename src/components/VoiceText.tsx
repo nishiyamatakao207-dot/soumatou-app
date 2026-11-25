@@ -40,7 +40,7 @@ export function VoiceText({
         </button>
       )}
       {speechSupported() && !speech.listening && <p className="muted small voice-hint-text">話した言葉が文字になります</p>}
-      {speech.listening && <p className="muted small">聞いています…（話し終わると自動で止まります。続けるときは、もう一度押してください）</p>}
+      {speech.listening && <p className="muted small">聞いています…話してください（文字が出るまで数秒かかることがあります。話し終わると自動で止まります）</p>}
       {speech.error && (
         <p className="error small">
           {speech.error}

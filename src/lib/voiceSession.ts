@@ -34,6 +34,7 @@ export const voiceSupported = speechAvailable;
 /** 録音を始める（ボタンを押したその場で呼ぶ）。始められなければ false */
 export function startVoice(): boolean {
   setState({ error: undefined, interim: '' });
+  pending.length = 0; // 前の音声入力の、あとから届いた言葉を持ち越さない
   return startSpeech(OWNER, {
     onFinal: emit,
     onInterim: (t) => setState({ interim: t }),
