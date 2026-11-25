@@ -5,6 +5,7 @@ import { describeFilter, filterFromQuery, filterToQuery, toMemoryFilter, type Fi
 import { groupByMonth, monthKeyOf, monthLabel, toEntries, type Entry } from '../lib/entries';
 import { navigate } from '../router';
 import { startVoice } from '../lib/voiceSession';
+import { keyboardVoiceNow } from '../lib/voiceMethod';
 import { StarSky } from '../components/StarSky';
 import { OnThisDayCard } from '../components/OnThisDayCard';
 import { LetterShelf } from '../components/LetterShelf';
@@ -127,7 +128,14 @@ export function Timeline({ query }: { query: string }) {
   }, [groups, view]);
 
   /** 「声で入力」：iPhone ではこのタップの中で録音を始める必要がある */
+  const kbInput = useRef<HTMLInputElement>(null);
   const recordVoice = () => {
+    if (keyboardVoiceNow()) {
+      // キーボードの音声入力：このタップの中でキーボードを出しておき、次の画面の入力欄へ引き継ぐ
+      kbInput.current?.focus();
+      navigate('/new?kb=1');
+      return;
+    }
     startVoice();
     navigate('/new?voice=1');
   };
@@ -286,6 +294,7 @@ export function Timeline({ query }: { query: string }) {
         />
       )}
 
+      <input ref={kbInput} className="kb-catcher" aria-hidden="true" tabIndex={-1} />
       <div className="record-bar">
         <button className="btn primary big voice-btn" onClick={recordVoice}>
           <span>🎙 声で入力</span>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { BgmChoice } from './music';
 import type { PhotoShape } from './shape';
 import type { ExportMode, ExportQuality } from './exporter';
+import type { VoiceMethod } from './voiceMethod';
 
 /* アプリの設定（この端末だけに保存） */
 
@@ -26,9 +27,11 @@ export interface Settings {
   exportMode: ExportMode;
   /** 動画の書き出し：動画素材の元の音（子どもの声など）を入れる */
   exportVideoSound: boolean;
+  /** 「声で入力」のやり方（auto：アプリの音声認識、だめならキーボードの音声入力） */
+  voiceMethod: VoiceMethod;
 }
 
-const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode', exportVideoSound: true };
+const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode', exportVideoSound: true, voiceMethod: 'auto' };
 
 /** 画面の外（起動時の判定など）から設定を読む */
 export const readSetting = <K extends keyof Settings>(key: K): Settings[K] => read()[key];

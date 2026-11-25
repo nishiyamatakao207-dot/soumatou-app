@@ -95,16 +95,12 @@ export function prepareForMicrophone(): string {
   const s = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
   if (!s) return 'audioSessionなし';
   const before = s.type;
+  // 「マイク用」を自分で決めず、ブラウザに任せる（auto）。自分で決めても、2回目以降に
+  // 「マイクの音が止められている（Source is muted）」となるのは直らなかったため
   try {
-    // すでにマイク用の設定でも、一度切り替え直す（iPhone で、2回目以降にマイクの音が届かなくなるのを防ぐため）
-    if (s.type === 'play-and-record') s.type = 'auto';
-    s.type = 'play-and-record';
+    s.type = 'auto';
   } catch {
-    try {
-      s.type = 'auto';
-    } catch {
-      /* 変えられない */
-    }
+    /* 変えられない */
   }
   return `audioSession ${before}→${s.type}`;
 }

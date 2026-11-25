@@ -6,7 +6,8 @@ import type { DateSource, MediaDraft, Memory } from '../data/types';
 import { Thumb } from '../components/Thumb';
 import { TagPicker } from '../components/TagPicker';
 import { importFile } from '../lib/media';
-import { VoiceText } from '../components/VoiceText';
+import { VoiceError, VoiceText } from '../components/VoiceText';
+import { switchToKeyboardVoice } from '../lib/voiceMethod';
 import { toLocalInput } from '../lib/format';
 import { FeelingChips, appendWord } from '../components/FeelingChips';
 import { useSetting } from '../lib/settings';
@@ -19,7 +20,11 @@ const joinSpeech = (t: string, chunk: string) => (t ? `${t}${/[。！？\s]$/.te
  * 記録の作成・編集。
  * voice：一覧の「声で入力」から来たとき（録音はもう始まっている）
  */
-export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
+export function Editor({ id, voice, keyboard }: { id?: string; voice?: boolean; keyboard?: boolean }) {
+  /** キーボードの音声入力で、気持ちの欄を最初に出す（一覧の「声で入力」から来たとき・途中で切り替えたとき） */
+  const [kb] = useState(!!keyboard);
+  /** 声で入力に失敗して、キーボードの音声入力に切り替えた */
+  const [voiceOff, setVoiceOff] = useState(false);
   const [lastTags, setLastTags] = useSetting('lastTags');
   const [memory, setMemory] = useState<Memory>();
   const [media, setMedia] = useState<MediaDraft[]>([]);
@@ -169,7 +174,7 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
         <button className="btn ghost" onClick={() => history.back()}>
           キャンセル
         </button>
-        <h1 className="title">{memory ? '思い出を編集' : voice ? '声で入力' : '思い出を記録'}</h1>
+        <h1 className="title">{memory ? '思い出を編集' : voice || kb ? '声で入力' : '思い出を記録'}</h1>
         <button className="btn primary" disabled={!canSave || (isLetter && !letterOk)} onClick={() => (isLetter ? setConfirmSeal(true) : save())}>
           保存
         </button>
@@ -205,7 +210,14 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
       )}
 
       <main className="form">
-        {voice && (
+        {kb && !memory && (
+          <section>
+            <h2 className="label">その時の気持ち</h2>
+            <VoiceText keyboardNow value={text} onChange={setText} rows={4} placeholder="一言でOK。写真・動画はこのあと選べます" />
+          </section>
+        )}
+        {voiceOff && <p className="keyboard-hint">下の「その時の気持ち」で、キーボードの🎤を押して話してください</p>}
+        {voice && !kb && !voiceOff && (
           <section className={`voice-panel ${vs.listening ? 'rec' : ''}`} aria-live="polite">
             <div className="voice-orb" aria-hidden="true">🎙</div>
             {vs.listening ? (
@@ -232,7 +244,19 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
                 )}
               </>
             )}
-            {vs.error && <p className="error small">{vs.error}</p>}
+            {vs.error && (
+              <VoiceError
+                message={vs.error}
+                onKeyboard={() => {
+                  switchToKeyboardVoice();
+                  // 下の気持ちの欄にキーボードを出す（このタップの中で：iPhone はそうしないとキーボードが出ない）
+                  const el = document.querySelector<HTMLTextAreaElement>('#feeling-text textarea');
+                  el?.focus();
+                  el?.scrollIntoView({ block: 'center' });
+                  setVoiceOff(true);
+                }}
+              />
+            )}
           </section>
         )}
         <section>
@@ -304,9 +328,13 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
           {busy && <p className="muted small">読み込み中…</p>}
         </section>
 
-        <section>
-          <h2 className="label">その時の気持ち</h2>
-          <VoiceText value={text} onChange={setText} rows={3} placeholder="一言でOK。写真だけ先に保存して、あとから足すこともできます" />
+        <section id="feeling-text">
+          {!(kb && !memory) && (
+            <>
+              <h2 className="label">その時の気持ち</h2>
+              <VoiceText keyboardNow={voiceOff} value={text} onChange={setText} rows={3} placeholder="一言でOK。写真だけ先に保存して、あとから足すこともできます" />
+            </>
+          )}
           <FeelingChips onPick={(w) => setText((t) => appendWord(t, w))} />
         </section>
 

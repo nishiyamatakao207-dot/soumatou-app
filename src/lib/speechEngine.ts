@@ -1,4 +1,5 @@
 import { pauseAllMedia, prepareForMicrophone } from './bgm';
+import { markAppVoiceFailed } from './voiceMethod';
 
 /* 音声入力（ブラウザ内蔵の音声認識）を、アプリ全体で1つだけ動かす係。
  * 入力欄の「声で入力」も、一覧の「声で入力」（思い出を編集の画面に続く）も、すべてここを通る。
@@ -138,7 +139,7 @@ let count = 0;
 const MESSAGES: Record<string, string> = {
   'not-allowed': 'マイクの使用が許可されていません（iPhoneの「設定」→「Safari」→「マイク」で許可してください）',
   'service-not-allowed': '音声入力が使えない状態です（「設定」→「一般」→「キーボード」の「音声入力」がオンか確認してください）',
-  'audio-capture': 'マイクが使えません。ほかのアプリがマイクを使っていないか確認してください',
+  'audio-capture': 'マイクの音が届いていません（iPhoneがマイクを止めている様子です）',
   network: '音声を文字にするサービスにつながりませんでした。ネットにつながっているか確認してください',
 };
 const NOT_HEARD = 'うまく聞き取れませんでした。もう一度押してください';
@@ -147,12 +148,6 @@ const STUCK = 'iPhoneの音声入力が、少しの間反応しなくなって�
 /** ホーム画面に追加したアプリとして開いているか */
 const standalone = () =>
   !!(navigator as unknown as { standalone?: boolean }).standalone || (typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches);
-
-/** うまくいかないときの、ほかの方法の案内 */
-const fallbackHint = () =>
-  standalone()
-    ? '（ホーム画面から開いたアプリでは、iPhoneの仕組みで音声入力が使えないことがあります。Safariで開くか、キーボードのマイクボタン🎙で話してください）'
-    : '（キーボードのマイクボタン🎙でも、話して入力できます）';
 
 /** 部品の知らせを外して止め、捨てる */
 function kill(rec: Recognition | null) {
@@ -227,9 +222,13 @@ function finish(s: Session, error?: string, gentle = false) {
     flushInterim(s);
     log('終わり');
   }
-  if (error) log(`知らせ：${error}`);
+  if (error) {
+    log(`知らせ：${error}`);
+    // うまくいかなかったことを覚える（iPhone では、その日はキーボードの音声入力に切り替える）
+    if (!error.startsWith('マイクの使用が許可されていません')) markAppVoiceFailed();
+  }
   s.h.onListening(false);
-  if (error) s.h.onError(error === NOT_HEARD || error === STUCK || error.startsWith('音声入力が使えない') || error.startsWith('音声入力を始められ') ? `${error}${fallbackHint()}` : error);
+  if (error) s.h.onError(error);
 }
 
 /** 部品が自然に止まった（裏で聞いていたものも含む） */

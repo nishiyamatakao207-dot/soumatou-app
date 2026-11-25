@@ -43,7 +43,7 @@ export function App() {
 
   switch (route.name) {
     case 'new':
-      return <Editor key={route.voice ? 'voice' : 'new'} voice={route.voice} />;
+      return <Editor key={route.voice ? 'voice' : route.keyboard ? 'kb' : 'new'} voice={route.voice} keyboard={route.keyboard} />;
     case 'feel':
       return <AddFeeling id={route.id} />;
     case 'edit':

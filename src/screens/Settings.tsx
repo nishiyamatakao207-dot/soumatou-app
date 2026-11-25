@@ -12,6 +12,7 @@ export function Settings() {
   const [dailyDigest, setDailyDigest] = useSetting('dailyDigest');
   const [showDate, setShowDate] = useSetting('showDate');
   const [onThisDay, setOnThisDay] = useSetting('onThisDay');
+  const [voiceMethod, setVoiceMethod] = useSetting('voiceMethod');
   const [canDigest, setCanDigest] = useState(false);
   const last = lastBackupAt();
   useEffect(() => {
@@ -64,6 +65,28 @@ export function Settings() {
         </section>
         <section className="setting">
           <BgmPicker />
+        </section>
+        <section className="setting">
+          <fieldset className="choice bare">
+            <legend>
+              <strong>「声で入力」のやり方</strong>
+            </legend>
+            {(
+              [
+                ['auto', 'おまかせ（おすすめ）', 'アプリの音声認識を使います。iPhoneでうまくいかなかったら、その日はキーボードの音声入力に切り替えます'],
+                ['app', 'アプリの音声認識', 'ボタンを押すとすぐ聞き始めます。iPhoneでは、続けて使うと反応しなくなることがあります'],
+                ['keyboard', 'キーボードの音声入力', 'ボタンを押すとキーボードが出るので、🎤を押して話します。iPhone本体の機能なので、何回続けても安定して使えます'],
+              ] as const
+            ).map(([v, label, note]) => (
+              <label key={v} className="choice-row">
+                <input type="radio" name="voiceMethod" checked={voiceMethod === v} onChange={() => setVoiceMethod(v)} />
+                <span>
+                  <strong>{label}</strong>
+                  <small>{note}</small>
+                </span>
+              </label>
+            ))}
+          </fieldset>
         </section>
         <section className="setting">
           <div className="setting-row" onClick={() => navigate('/voicecheck')} role="button" tabIndex={0}>
