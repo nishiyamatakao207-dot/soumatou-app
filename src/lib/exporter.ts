@@ -27,6 +27,7 @@ import {
   photoDwell,
   place,
   type Placement,
+  type PhotoTiming,
   type Slide,
 } from './movie';
 import { DEFAULT_PALETTE, extractPalette, type Palette } from './palette';
@@ -137,6 +138,8 @@ export interface ExportOptions {
   bgm: BgmChoice;
   /** 写真の形（設定で選んだもの） */
   shape: PhotoShape;
+  /** 写真1枚の表示時間（設定で選んだもの） */
+  timing: PhotoTiming;
   quality: ExportQuality;
   mode: ExportMode;
   /** 動画素材の元の音（子どもの声など）を入れる */
@@ -175,13 +178,13 @@ interface Timing {
 }
 
 /** 再生画面と同じ規則で、各スライドの始まりと長さを決める */
-function schedule(slides: Slide[], videoSec: Map<number, number>): Timing {
+function schedule(slides: Slide[], videoSec: Map<number, number>, pt: PhotoTiming): Timing {
   const start: number[] = [];
   const dwell: number[] = [];
   let t = OPEN_MS;
   slides.forEach((s, i) => {
     const sec = videoSec.get(i);
-    const d = s.media?.kind === 'video' ? (sec ? Math.min(VIDEO_MAX_MS, sec * 1000 + FADE_MS) : VIDEO_MAX_MS) : photoDwell();
+    const d = s.media?.kind === 'video' ? (sec ? Math.min(VIDEO_MAX_MS, sec * 1000 + FADE_MS) : VIDEO_MAX_MS) : photoDwell(s, pt);
     start.push(t);
     dwell.push(d);
     t += d - FADE_MS; // 次の写真は、前の写真のフェードと重ねて出る
@@ -190,10 +193,23 @@ function schedule(slides: Slide[], videoSec: Map<number, number>): Timing {
   return { start, dwell, total: start[last] + dwell[last] + FADE_MS + TAIL_MS };
 }
 
-/** 秒数の目安（書き出す前の画面で使う） */
-export function estimateDurationSec(slides: Slide[]): number {
+/** できあがる動画の長さの目安（秒）。書き出す前の画面で使う。videoSec：動画素材の長さ（測れていれば） */
+export function estimateDurationSec(slides: Slide[], pt: PhotoTiming, videoSec = new Map<number, number>()): number {
   if (!slides.length) return 0;
-  return Math.round(schedule(slides, new Map()).total / 1000);
+  return Math.round(schedule(slides, videoSec, pt).total / 1000);
+}
+
+/** 動画素材の長さ（秒）を測る（書き出す前の長さの目安を正確にするため） */
+export async function measureVideoSecs(slides: Slide[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  for (let i = 0; i < slides.length; i++) {
+    const m = slides[i].media;
+    if (m?.kind !== 'video' || m.missing) continue;
+    const blob = await loadFile(m.id);
+    const d = blob && (await videoDuration(blob));
+    if (d) out.set(i, d);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- 動きの計算（CSS と同じ）
@@ -1019,10 +1035,12 @@ class Renderer {
     /** 再生しながら録画する（動画は再生して描く） */
     readonly realtime: boolean,
     private prof: Prof,
+    /** 写真1枚の表示時間 */
+    private pt: PhotoTiming,
   ) {
     this.canvas = canvas(W, H);
     this.ctx = this.canvas.getContext('2d', { alpha: false }) ?? this.canvas.getContext('2d')!;
-    this.timing = schedule(slides, new Map());
+    this.timing = schedule(slides, new Map(), this.pt);
   }
 
   /** 動画の長さを調べて、タイミングを決め直す */
@@ -1034,7 +1052,7 @@ class Renderer {
       const d = blob && (await videoDuration(blob));
       if (d) this.videoSec.set(i, d);
     }
-    this.timing = schedule(this.slides, this.videoSec);
+    this.timing = schedule(this.slides, this.videoSec, this.pt);
   }
 
   get frameCount() {
@@ -1397,7 +1415,7 @@ class Renderer {
     const local = t - this.timing.start[i];
 
     // 漂い（CSS の float：-向き → +向き、0.97 → 1.03 倍）
-    const f = easeInOut(clamp01(local / driftMs(slide)));
+    const f = easeInOut(clamp01(local / driftMs(slide, this.pt)));
     const dx = lerp(-pl.dx, pl.dx, f);
     const dy = lerp(-pl.dy, pl.dy, f);
     const sc = lerp(0.97, 1.03, f);
@@ -1677,7 +1695,7 @@ export async function exportMovie(o: ExportOptions): Promise<ExportResult> {
   }
   if (realtime && !canRecordRealtime()) throw new Error('この端末・ブラウザは動画の書き出しに対応していません');
 
-  const r = new Renderer(o.slides, o.showDate, o.shape, realtime, prof);
+  const r = new Renderer(o.slides, o.showDate, o.shape, realtime, prof, o.timing);
   try {
     o.onProgress({ ratio: 0, label: '素材を確かめています…' });
     prof.mark();

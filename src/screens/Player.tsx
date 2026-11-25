@@ -13,6 +13,7 @@ import { DEFAULT_PALETTE, extractPalette, type Palette } from '../lib/palette';
 import { CircleImage, CircleVideo } from '../components/Circle';
 import { BgmPicker } from '../components/BgmPicker';
 import { BgmPlayer } from '../lib/bgm';
+import { PhotoTimePicker, usePhotoTiming } from '../components/PhotoTimePicker';
 import { videoAudio } from '../lib/videoSound';
 import { BG_FADE_MS, FADE_MS, MOTES, VIDEO_MAX_MS, PHOTO_MS, buildSlides, driftMs, photoDwell, place, type Slide } from '../lib/movie';
 
@@ -65,6 +66,11 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
   const [showDate, setShowDate] = useSetting('showDate');
   const [bgmChoice] = useSetting('bgm');
   const [shape] = useSetting('photoShape');
+  const timing = usePhotoTiming();
+  const timingRef = useRef(timing);
+  timingRef.current = timing;
+  /** 再生中のメニュー（表示時間） */
+  const [menu, setMenu] = useState(false);
   const bgm = useRef<BgmPlayer | null>(null);
   /** 音の出口ができた（タップで音を起こした）ら増える */
   const [audioReady, setAudioReady] = useState(0);
@@ -82,7 +88,7 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
       if (digest && !items) return navigate('/', true);
       const list = buildSlides(items ?? []);
       setMemCount(new Set(list.map((x) => x.memory.id)).size);
-      if (digest) clock.current = { t: 0, dwell: photoDwell(), leaving: false };
+      if (digest) clock.current = { t: 0, dwell: list[0]?.media?.kind === 'video' ? VIDEO_MAX_MS : photoDwell(list[0], timingRef.current), leaving: false };
       setSlides(list);
     })();
   }, [filter]);
@@ -95,12 +101,19 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
   const dwellFor = useCallback(
     (i: number) => {
       const s = slides?.[i];
-      if (!s) return photoDwell();
+      if (!s) return photoDwell(undefined, timingRef.current);
       if (s.media?.kind === 'video') return VIDEO_MAX_MS;
-      return photoDwell();
+      return photoDwell(s, timingRef.current);
     },
     [slides],
   );
+  // 再生中に表示時間を変えたら、今の写真からすぐ反映する（動画はそのまま）
+  useEffect(() => {
+    const s = slides?.[cur];
+    if (!s || s.media?.kind === 'video') return;
+    clock.current.dwell = photoDwell(s, timing);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timing.sec, timing.autoLong]);
 
   const goTo = useCallback(
     (n: number) => {
@@ -430,6 +443,9 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
           >
             日付
           </button>
+          <button className={`pill ${menu ? 'on' : ''}`} onClick={() => setMenu((m) => !m)} aria-expanded={menu} aria-label="表示時間を変える">
+            ⏱ {timing.sec}秒
+          </button>
           <button onClick={() => setMuted((m) => !m)} aria-label={muted ? '音を出す' : '消音'}>
             {muted ? '🔇' : '🔊'}
           </button>
@@ -437,6 +453,14 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
             ✕
           </button>
         </div>
+        )}
+        {menu && !digest && (
+          <div className="player-menu">
+            <PhotoTimePicker dark />
+            <button className="btn small" onClick={() => setMenu(false)}>
+              閉じる
+            </button>
+          </div>
         )}
       </div>
 
@@ -504,6 +528,7 @@ function SlideView({
   onVideoEnded?: (i: number) => void;
 }) {
   const p = useMemo(() => place(slide.key, vw, vh), [slide.key, vw, vh]);
+  const timing = usePhotoTiming();
   const media = slide.media;
   const { url, missing } = useStoredUrl(media && !media.missing ? media.id : undefined);
   const lost = !!media && (media.missing || missing);
@@ -518,7 +543,7 @@ function SlideView({
           width: p.d,
           ['--dx' as string]: `${p.dx.toFixed(1)}px`,
           ['--dy' as string]: `${p.dy.toFixed(1)}px`,
-          ['--dur' as string]: `${driftMs(slide)}ms`,
+          ['--dur' as string]: `${driftMs(slide, timing)}ms`,
         }}
       >
         <div className="circle-wrap" style={{ height: p.d }}>

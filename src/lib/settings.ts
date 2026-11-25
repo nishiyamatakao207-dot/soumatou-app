@@ -29,9 +29,13 @@ export interface Settings {
   exportVideoSound: boolean;
   /** 「声で入力」のやり方（auto：アプリの音声認識、だめならキーボードの音声入力） */
   voiceMethod: VoiceMethod;
+  /** 写真1枚の表示時間（秒） */
+  photoSec: number;
+  /** 字幕が長い写真は、自動で表示時間を延ばす */
+  autoLongCaption: boolean;
 }
 
-const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode', exportVideoSound: true, voiceMethod: 'auto' };
+const DEFAULTS: Settings = { showDate: true, bgm: 'gentle', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode', exportVideoSound: true, voiceMethod: 'auto', photoSec: 7, autoLongCaption: true };
 
 /** 画面の外（起動時の判定など）から設定を読む */
 export const readSetting = <K extends keyof Settings>(key: K): Settings[K] => read()[key];

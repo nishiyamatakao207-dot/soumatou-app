@@ -589,3 +589,19 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .kb-catcher { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; font-size: 16px; pointer-events: none; }
 .choice.bare { border: 0; padding: 0; margin: 0; }
 .choice.bare legend { padding: 0 0 6px; }
+
+/* ---- 写真1枚の表示時間 ---- */
+.time-picker { display: grid; gap: 10px; }
+.time-head { display: flex; justify-content: space-between; align-items: baseline; }
+.time-value { font-size: 20px; font-weight: 700; color: var(--accent); }
+.time-value small { font-size: 12px; font-weight: normal; color: var(--muted); }
+.time-range { width: 100%; accent-color: var(--accent); }
+.time-auto { display: flex; gap: 10px; align-items: center; cursor: pointer; }
+.time-auto span { display: grid; gap: 2px; font-size: 14px; }
+.time-auto small { font-size: 12px; color: var(--muted); }
+.time-picker.on-dark { color: #fff3df; }
+.player-menu { margin: 10px 0 0 auto; width: min(100%, 360px); display: grid; gap: 10px; padding: 14px; border-radius: 16px;
+  background: rgba(20,16,13,.88); border: 1px solid rgba(255,243,223,.18); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.player-menu > .btn { justify-self: end; }
+.export-length { margin: 8px 0 0; display: grid; gap: 2px; font-size: 16px; font-weight: 600; }
+.export-length small { font-size: 12px; font-weight: normal; color: var(--muted); }

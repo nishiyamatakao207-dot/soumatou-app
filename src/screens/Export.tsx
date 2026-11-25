@@ -7,6 +7,7 @@ import type { ExportCaps, ExportProgress, ExportResult } from '../lib/exporter';
 import { BgmPicker } from '../components/BgmPicker';
 import { createExportAudioContext } from '../lib/bgm';
 import { SHAPE_OPTIONS } from '../lib/shape';
+import { PhotoTimePicker, usePhotoTiming } from '../components/PhotoTimePicker';
 
 /* 思い出ムービーを動画ファイルにして、LINE などに共有する画面。
  * 書き出しの部品は大きいので、この画面を開いたときに初めて読み込む。 */
@@ -38,7 +39,10 @@ function useRemainingText() {
 export function Export({ query }: { query: string }) {
   const filter = useMemo(() => filterFromQuery(query), [query]);
   const [slides, setSlides] = useState<Slide[]>();
-  const [estimate, setEstimate] = useState<number>();
+  const timing = usePhotoTiming();
+  /** 書き出しの部品（長さの目安の計算に使う）と、動画素材の長さ */
+  const [ex, setEx] = useState<Awaited<ReturnType<typeof loadExporter>>>();
+  const [videoSecs, setVideoSecs] = useState<Map<number, number>>();
   const [caps, setCaps] = useState<ExportCaps>();
   const [quality, setQuality] = useSetting('exportQuality');
   const [mode, setMode] = useSetting('exportMode');
@@ -55,10 +59,17 @@ export function Export({ query }: { query: string }) {
     (async () => {
       const list = buildSlides(await listDatedItems(toMemoryFilter(filter)));
       setSlides(list);
-      const ex = await loadExporter();
-      setEstimate(ex.estimateDurationSec(list));
+      const m = await loadExporter();
+      setEx(m);
+      // 動画素材の長さを測って、長さの目安を正確にする
+      setVideoSecs(await m.measureVideoSecs(list));
     })();
   }, [filter]);
+  /** できあがる動画の長さの目安（表示時間を変えると、すぐ計算し直す） */
+  const estimate = useMemo(
+    () => (ex && slides ? ex.estimateDurationSec(slides, timing, videoSecs) : undefined),
+    [ex, slides, timing.sec, timing.autoLong, videoSecs], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const hasVideos = !!slides?.some((s) => s.media?.kind === 'video' && !s.media.missing);
   const withSound = bgm !== 'none' || (videoSound && hasVideos);
@@ -122,6 +133,7 @@ export function Export({ query }: { query: string }) {
         bgm,
         videoSound,
         shape,
+        timing,
         quality: effectiveQuality,
         mode: effectiveMode,
         audioCtx,
@@ -185,13 +197,23 @@ export function Export({ query }: { query: string }) {
         <section className="export-summary">
           <p className="export-what">{describeFilter(filter)}</p>
           <p className="muted small">
-            写真・動画 {slides ? count : '…'}枚 ・ 長さ {estimate == null ? '計算中…' : `約${mmss(estimate)}`}（動画の長さにより変わります）・ 縦長 {effectiveQuality === 'high' ? '1080×1920' : '720×1280'}
+            写真・動画 {slides ? count : '…'}枚 ・ 縦長 {effectiveQuality === 'high' ? '1080×1920' : '720×1280'}
             ・ 写真の形：{SHAPE_OPTIONS.find((o) => o.value === shape)?.label}（設定で変えられます）
+          </p>
+          <p className="export-length">
+            できあがる動画の長さ：{estimate == null ? '計算中…' : `約${mmss(estimate)}`}
+            <small>
+              写真1枚 {timing.sec}秒{timing.autoLong ? '（字幕が長い写真は少し長め）' : ''}・動画素材はその長さで計算
+              {videoSecs == null && '（動画の長さを測っています…）'}
+            </small>
           </p>
         </section>
 
         {phase.kind === 'ready' && (
           <>
+            <section className="setting">
+              <PhotoTimePicker />
+            </section>
             <BgmPicker />
             <label className="switch dark">
               <input type="checkbox" checked={showDate} onChange={(e) => setShowDate(e.target.checked)} />

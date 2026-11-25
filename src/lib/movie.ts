@@ -5,7 +5,7 @@ import type { MediaItem, Memory } from '../data/types';
  * ここを変えると、再生と書き出しの両方の見た目・タイミングが変わる。 */
 
 export const FADE_MS = 1800; // フェードの長さ（前後の写真が重なる時間）
-export const PHOTO_MS = 7000; // 写真1枚の表示時間（次の写真が出始めるまでの間隔）
+export const PHOTO_MS = 7000; // 写真1枚の表示時間の標準（次の写真が出始めるまでの間隔）
 export const VIDEO_MAX_MS = 20000; // 動画はここまでで次へ
 export const BG_FADE_MS = 2600; // 背景の色が移り変わる時間
 export const COMMENT_SPACE = 150; // 写真の下にコメント用にあける高さ
@@ -35,11 +35,40 @@ export function buildSlides(items: DatedItem[]): Slide[] {
   });
 }
 
-/** 写真の表示時間。フェードで重なる分を足して、写真と写真の間隔がちょうど PHOTO_MS になるようにする */
-export const photoDwell = () => PHOTO_MS + FADE_MS;
+/** 写真1枚の表示時間の設定（設定画面・再生中のメニュー・書き出しで同じものを使う） */
+export interface PhotoTiming {
+  /** 1枚の表示時間（秒）。3〜15 */
+  sec: number;
+  /** 字幕が長い写真は、読み切れるよう自動で延ばす */
+  autoLong: boolean;
+}
+export const DEFAULT_TIMING: PhotoTiming = { sec: PHOTO_MS / 1000, autoLong: true };
+export const PHOTO_SEC_MIN = 3;
+export const PHOTO_SEC_MAX = 15;
+
+/** 字幕1文字を読むのにかける時間（ゆっくりめ：1秒に約7文字） */
+const READ_MS_PER_CHAR = 150;
+/** 字幕を読み切るのに必要な、写真の間隔（字幕が出るまでの待ち＋文字数分＋読み終えてからの余韻） */
+export function readMs(comment: string): number {
+  const n = [...comment.replace(/\s/g, '')].length;
+  return n ? COMMENT_DELAY_MS + COMMENT_FADE_MS / 2 + n * READ_MS_PER_CHAR + 1200 : 0;
+}
+/** 自動で延ばすのは最大でここまで（長すぎる字幕で止まって見えないように） */
+const MAX_EXTRA_MS = 10000;
+
+/** 写真と次の写真の間隔（ミリ秒）。字幕が長いときは自動で延ばす */
+export function photoIntervalMs(slide: Slide | undefined, t: PhotoTiming = DEFAULT_TIMING): number {
+  const base = Math.min(PHOTO_SEC_MAX, Math.max(PHOTO_SEC_MIN, t.sec)) * 1000;
+  if (!t.autoLong || !slide?.comment) return base;
+  return Math.min(base + MAX_EXTRA_MS, Math.max(base, readMs(slide.comment)));
+}
+
+/** 写真の表示時間。フェードで重なる分を足して、写真と写真の間隔がちょうど設定の秒数になるようにする */
+export const photoDwell = (slide?: Slide, t: PhotoTiming = DEFAULT_TIMING) => photoIntervalMs(slide, t) + FADE_MS;
 
 /** 漂う動き（CSS の float アニメーション）の長さ */
-export const driftMs = (slide: Slide) => (slide.media?.kind === 'video' ? VIDEO_MAX_MS : photoDwell()) + FADE_MS * 2;
+export const driftMs = (slide: Slide, t: PhotoTiming = DEFAULT_TIMING) =>
+  (slide.media?.kind === 'video' ? VIDEO_MAX_MS : photoDwell(slide, t)) + FADE_MS * 2;
 
 /** スライドごとに毎回同じになる乱数（戻っても同じ位置に出る） */
 export function seeded(key: string) {
