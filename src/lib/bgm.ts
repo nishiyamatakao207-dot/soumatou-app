@@ -156,6 +156,9 @@ export class BgmPlayer {
   private ctx: AudioContext;
   private gain: GainNode;
   private source?: AudioBufferSourceNode;
+  /** 動画の音（BGM とは別の音量） */
+  private clipGain: GainNode;
+  private clip?: AudioBufferSourceNode;
   private muted = false;
   private ducked = false;
   private stopped = false;
@@ -170,6 +173,8 @@ export class BgmPlayer {
     this.gain = this.ctx.createGain();
     this.gain.gain.value = 0;
     this.gain.connect(this.ctx.destination);
+    this.clipGain = this.ctx.createGain();
+    this.clipGain.connect(this.ctx.destination);
     players.add(this);
   }
 
@@ -222,6 +227,32 @@ export class BgmPlayer {
   setMuted(m: boolean) {
     this.muted = m;
     this.apply(0.2);
+    this.clipGain.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.05);
+  }
+
+  /**
+   * 動画の音を、offset 秒の位置から鳴らす。
+   * iPhone は、タップの直後でないと動画の音を自動で出せない（消音になる）。
+   * そこで動画は消音で再生し、音だけを「はじめる」のタップで起こしておいたこの音の出口で鳴らす。
+   * 一時停止（pause）すると、音も同じところで止まり、再開すると続きから鳴る。
+   */
+  playClip(buf: AudioBuffer, offset: number) {
+    this.stopClip();
+    if (offset >= buf.duration) return;
+    if (this.ctx.state !== 'running') void this.ctx.resume().catch(() => {});
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(this.clipGain);
+    src.start(this.ctx.currentTime, Math.max(0, offset));
+    this.clip = src;
+  }
+  stopClip() {
+    try {
+      this.clip?.stop();
+    } catch {
+      /* 止まっている */
+    }
+    this.clip = undefined;
   }
   /** 音のある動画の間は BGM を小さく */
   duck(on: boolean) {
@@ -250,6 +281,7 @@ export class BgmPlayer {
     } catch {
       /* すでに止まっている */
     }
+    this.stopClip();
     void this.ctx.close().catch(() => {});
   }
 }

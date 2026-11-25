@@ -56,6 +56,7 @@ export function CircleVideo({
   muted,
   onDuration,
   onEnded,
+  onVideo,
 }: {
   src: string;
   diameter: number;
@@ -65,9 +66,17 @@ export function CircleVideo({
   muted: boolean;
   onDuration?: (sec: number) => void;
   onEnded?: () => void;
+  /** 動画の部品を渡す（再生画面が、動画の音を合わせて鳴らすため） */
+  onVideo?: (v: HTMLVideoElement | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const onVideoRef = useRef(onVideo);
+  onVideoRef.current = onVideo;
+  useEffect(() => {
+    onVideoRef.current?.(videoRef.current);
+    return () => onVideoRef.current?.(null);
+  }, [src]);
 
   // コマを描き続ける（再生中だけ）
   useEffect(() => {

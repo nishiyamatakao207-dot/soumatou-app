@@ -860,7 +860,7 @@ function isSilent(buf: AudioBuffer): boolean {
 /** 動画ファイルから音だけを取り出す。
  * まずブラウザの音の読み込み（decodeAudioData）で試し、だめなら Mediabunny で音の部分だけを読む。
  * iPhone の動画（.MOV）は、ブラウザによっては前者で読めないことがある。 */
-async function decodeVideoAudio(blob: Blob): Promise<SoundInfo> {
+export async function decodeVideoAudio(blob: Blob): Promise<SoundInfo> {
   let firstErr = '';
   try {
     const ctx = new OfflineAudioContext(2, 1, SAMPLE_RATE);

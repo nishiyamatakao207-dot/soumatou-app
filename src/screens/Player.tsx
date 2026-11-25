@@ -13,6 +13,7 @@ import { DEFAULT_PALETTE, extractPalette, type Palette } from '../lib/palette';
 import { CircleImage, CircleVideo } from '../components/Circle';
 import { BgmPicker } from '../components/BgmPicker';
 import { BgmPlayer } from '../lib/bgm';
+import { videoAudio } from '../lib/videoSound';
 import { BG_FADE_MS, FADE_MS, MOTES, VIDEO_MAX_MS, PHOTO_MS, buildSlides, driftMs, photoDwell, place, type Slide } from '../lib/movie';
 
 /* 走馬灯：丸く切り抜いた写真が、画面のあちこちにふわっと現れては消えていく。
@@ -65,6 +66,11 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
   const [bgmChoice] = useSetting('bgm');
   const [shape] = useSetting('photoShape');
   const bgm = useRef<BgmPlayer | null>(null);
+  /** 音の出口ができた（タップで音を起こした）ら増える */
+  const [audioReady, setAudioReady] = useState(0);
+  /** 今の動画の部品と、その音（読み込み中は undefined、音がない・読めないときは null） */
+  const [curVideo, setCurVideo] = useState<HTMLVideoElement | null>(null);
+  const [clipBuf, setClipBuf] = useState<AudioBuffer | null | undefined>(null);
   /** BGM の状態（画面の下に小さく出す） */
   const [bgmStatus, setBgmStatus] = useState<string>();
   const progressRef = useRef<HTMLDivElement>(null);
@@ -219,21 +225,54 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
   const curIsVideo = slides?.[cur]?.media?.kind === 'video';
   useEffect(() => bgm.current?.duck(curIsVideo && !muted), [curIsVideo, muted]);
 
+  // ---- 動画の音：動画は消音で再生し、音は BGM と同じ出口で鳴らす（iPhone で、自動で次の動画になっても音が出るように）
+  const curMedia = slides?.[cur]?.media;
+  const curVideoId = curMedia?.kind === 'video' && !curMedia.missing ? curMedia.id : undefined;
+  useEffect(() => {
+    bgm.current?.stopClip();
+    if (!curVideoId) return setClipBuf(null);
+    setClipBuf(undefined);
+    let alive = true;
+    videoAudio(curVideoId).then((b) => alive && setClipBuf(b));
+    // 次の動画の音も先に用意しておく
+    const nextMedia = slides?.[cur + 1]?.media;
+    if (nextMedia?.kind === 'video' && !nextMedia.missing) void videoAudio(nextMedia.id);
+    return () => {
+      alive = false;
+      bgm.current?.stopClip();
+    };
+  }, [curVideoId, cur, slides]);
+  useEffect(() => {
+    const p = bgm.current;
+    const v = curVideo;
+    if (!clipBuf || !p || !v || finished) return;
+    // 動画が動き出したら、その位置から音を鳴らす
+    const start = () => p.playClip(clipBuf, v.currentTime);
+    if (!v.paused && v.readyState >= 3) start();
+    else v.addEventListener('playing', start, { once: true });
+    return () => v.removeEventListener('playing', start);
+  }, [clipBuf, curVideo, audioReady, finished]);
+  useEffect(() => {
+    if (finished) bgm.current?.stopClip();
+  }, [finished]);
+
   /** ひとめぐり：タップで音を出す（iPhone ではタップの中で音を起こす） */
   const soundOn = () => {
     setMuted(false);
-    if (!bgm.current && bgmChoice !== 'none') {
+    if (!bgm.current) {
+      // BGM なしでも、動画の音のために音の出口を起こしておく
       const p = new BgmPlayer();
       p.unlock();
       bgm.current = p;
-      void p.play(bgmChoice);
+      setAudioReady((n) => n + 1);
+      if (bgmChoice !== 'none') void p.play(bgmChoice);
     }
   };
 
   const restart = () => {
     if (bgm.current) {
       bgm.current.resume();
-      void bgm.current.play(bgmChoice);
+      if (bgmChoice !== 'none') void bgm.current.play(bgmChoice);
     }
     setPrev(null);
     setCur(0);
@@ -279,11 +318,12 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
           className="btn primary big"
           onClick={() => {
             clock.current = { t: 0, dwell: dwellFor(0), leaving: false };
+            // iPhone では、このタップの中で音を起こしておく必要がある（BGM なしでも、動画の音に使う）
+            const p = new BgmPlayer();
+            p.unlock();
+            bgm.current = p;
+            setAudioReady((n) => n + 1);
             if (bgmChoice !== 'none') {
-              // iPhone では、このタップの中で音を起こしておく必要がある
-              const p = new BgmPlayer();
-              p.unlock();
-              bgm.current = p;
               setBgmStatus('♪ BGMを準備中…');
               void p.play(bgmChoice).then((ok) => {
                 if (bgm.current !== p) return;
@@ -347,7 +387,8 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
           vh={vh}
           leaving={finished}
           playing={!paused && !finished}
-          muted={muted}
+          muted={muted || clipBuf !== null}
+          onVideo={setCurVideo}
           showDate={showDate}
           ago={!!filter.day}
           shape={shape}
@@ -443,7 +484,9 @@ function SlideView({
   onImage,
   onVideoDuration,
   onVideoEnded,
+  onVideo,
 }: {
+  onVideo?: (v: HTMLVideoElement | null) => void;
   slide: Slide;
   index: number;
   vw: number;
@@ -497,6 +540,7 @@ function SlideView({
               muted={muted}
               onDuration={(s) => onVideoDuration?.(index, s)}
               onEnded={() => onVideoEnded?.(index)}
+              onVideo={onVideo}
             />
           )}
         </div>
