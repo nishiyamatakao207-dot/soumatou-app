@@ -17,7 +17,7 @@ const joinSpeech = (t: string, chunk: string) => (t ? `${t}${/[。！？\s]$/.te
 
 /**
  * 記録の作成・編集。
- * voice：一覧の「声で残す」から来たとき（録音はもう始まっている）
+ * voice：一覧の「声で入力」から来たとき（録音はもう始まっている）
  */
 export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
   const [lastTags, setLastTags] = useSetting('lastTags');
@@ -27,7 +27,7 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
   // 新しい記録では、前回使ったタグを最初から選んでおく
   const [tags, setTags] = useState<string[]>(() => (id ? [] : lastTags));
   const presetTags = !id && lastTags.length > 0;
-  // 「声で残す」：一覧のボタンで始めた録音の言葉を、気持ちの欄に入れていく
+  // 「声で入力」：一覧のボタンで始めた録音の言葉を、気持ちの欄に入れていく
   const vs = useVoiceSession((chunk) => voice && setText((t) => joinSpeech(t, chunk)));
   const [date, setDate] = useState(() => Date.now());
   /** 日付を自分で変えたら、写真の撮影日で上書きしない */
@@ -169,7 +169,7 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
         <button className="btn ghost" onClick={() => history.back()}>
           キャンセル
         </button>
-        <h1 className="title">{memory ? '思い出を編集' : voice ? '声で残す' : '思い出を記録'}</h1>
+        <h1 className="title">{memory ? '思い出を編集' : voice ? '声で入力' : '思い出を記録'}</h1>
         <button className="btn primary" disabled={!canSave || (isLetter && !letterOk)} onClick={() => (isLetter ? setConfirmSeal(true) : save())}>
           保存
         </button>
@@ -222,7 +222,7 @@ export function Editor({ id, voice }: { id?: string; voice?: boolean }) {
             ) : (
               <>
                 <p className="voice-lead">
-                  {text ? '文字にしました。写真・動画はこのあと選べます。' : vs.error ? '' : '話した言葉がここに文字で出ます'}
+                  {text ? '文字にしました。写真・動画はこのあと選べます。' : vs.error ? '' : '話した言葉が文字になります'}
                 </p>
                 {text && <p className="voice-live">{text}</p>}
                 {voiceSupported() && (

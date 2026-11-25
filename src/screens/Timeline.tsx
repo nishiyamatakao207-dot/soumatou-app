@@ -76,7 +76,7 @@ export function Timeline({ query }: { query: string }) {
     return g;
   }, [shown]);
 
-  /** 「声で残す」：iPhone ではこのタップの中で録音を始める必要がある */
+  /** 「声で入力」：iPhone ではこのタップの中で録音を始める必要がある */
   const recordVoice = () => {
     startVoice();
     navigate('/new?voice=1');
@@ -194,7 +194,8 @@ export function Timeline({ query }: { query: string }) {
 
       <div className="record-bar">
         <button className="btn primary big voice-btn" onClick={recordVoice}>
-          🎙 声で残す
+          <span>🎙 声で入力</span>
+          <small className="voice-hint">話した言葉が文字になります</small>
         </button>
         <button className="btn big photo-btn" onClick={() => navigate('/new')} aria-label="思い出を記録">
           ＋ 写真で

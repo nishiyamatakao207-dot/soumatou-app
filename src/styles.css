@@ -276,6 +276,10 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
   padding: 12px max(16px, env(safe-area-inset-left, 0px)) calc(12px + var(--safe-bottom));
   background: linear-gradient(transparent, color-mix(in srgb, var(--bg) 92%, transparent) 35%); }
 .record-bar .voice-btn { flex: 1; max-width: 340px; font-size: 18px; min-height: 58px; border-radius: 999px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.record-bar .voice-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; line-height: 1.2; }
+.voice-hint { font-size: 11px; font-weight: normal; opacity: .78; }
+.voicetext .voice-hint-text { margin: -4px 0 0; }
+.voicetext:not(.compact) .voice-hint-text { text-align: center; }
 .record-bar .photo-btn { flex: none; min-height: 58px; border-radius: 999px; }
 
 /* ---- 今日のひとめぐり ---- */

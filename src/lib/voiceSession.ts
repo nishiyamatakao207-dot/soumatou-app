@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { releaseSpeech, speechAvailable, startSpeech, stopSpeech } from './speechEngine';
 
-/* 「声で残す」用の録音（音声認識）。
+/* 「声で入力」用の録音（音声認識）。
  * iPhone では、ボタンを押したその瞬間でないと録音を始められない。
  * そこで一覧画面のボタンで録音を始め、画面が切り替わっても続くよう、画面とは別にここで持っておく。
  * 話した言葉はすぐ文字になり、画面がまだ受け取っていない分はためておく。 */
@@ -16,7 +16,7 @@ let state: State = { listening: false, interim: '' };
 const pending: string[] = [];
 const finalListeners = new Set<(chunk: string) => void>();
 const stateListeners = new Set<(s: State) => void>();
-/** 「声で残す」の音声入力であることの印 */
+/** 「声で入力」の音声入力であることの印 */
 const OWNER = {};
 
 const setState = (s: Partial<State>) => {
