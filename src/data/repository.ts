@@ -1,5 +1,6 @@
 import { db, type LegacyMediaRow } from './db';
 import type { MediaDraft, MediaItem, Memory, MemoryFilter, StoredFile } from './types';
+import { matchesAll, normalize, searchWords } from '../lib/search';
 
 export const newId = () =>
   (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -86,12 +87,26 @@ export async function listDatedItems(filter?: MemoryFilter): Promise<DatedItem[]
   const memories = (await listMemories(filter ? { tags: filter.tags } : undefined)).filter(
     (m) => !isSealed(m) && (!filter?.memoryId || m.id === filter.memoryId),
   );
+  // 写真・動画の情報と「ファイルがあるか」は、記録ごとに読まず、まとめて1回で読む（数千件でも速く）
+  const [rows, fileIds] = await Promise.all([db.media.toArray(), db.files.toCollection().primaryKeys()]);
+  const present = new Set(fileIds as string[]);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const words = filter?.keyword ? searchWords(filter.keyword) : [];
   const items: (DatedItem & { order: number })[] = [];
   let order = 0;
   for (const m of memories) {
-    const media = await getMediaFor(m);
-    if (!media.length) items.push({ memory: m, date: m.date, order: order++ });
-    for (const x of media) items.push({ memory: m, media: x, date: x.takenAt ?? m.date, order: order++ });
+    const media = m.mediaIds
+      .map((id) => byId.get(id))
+      .filter((x): x is LegacyMediaRow => !!x)
+      .map((r) => ({ ...clean(r), missing: !present.has(r.id) }));
+    // キーワード：記録のひとこと・タグに含まれれば記録全体、写真のコメントに含まれればその写真
+    const memoryHit = words.length > 0 && matchesAll(normalize(`${m.text} ${m.tags.map((t) => `#${t} ${t}`).join(' ')}`), words);
+    const hit = (caption?: string) => !words.length || memoryHit || matchesAll(normalize(caption ?? ''), words);
+    if (!media.length) {
+      if (hit()) items.push({ memory: m, date: m.date, order: order++ });
+      continue;
+    }
+    for (const x of media) if (hit(x.caption)) items.push({ memory: m, media: x, date: x.takenAt ?? m.date, order: order++ });
   }
   return items
     .filter((it) => (filter?.from == null || it.date >= filter.from) && (filter?.to == null || it.date <= filter.to))

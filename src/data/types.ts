@@ -74,4 +74,6 @@ export interface MemoryFilter {
   monthDays?: string[];
   /** この記録だけ（開けた手紙を流すとき） */
   memoryId?: string;
+  /** キーワード：気持ちの言葉とタグから探す */
+  keyword?: string;
 }

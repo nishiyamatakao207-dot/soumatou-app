@@ -273,7 +273,7 @@ export function Player({ query, digest }: { query: string; digest?: boolean }) {
           {formatDate(slides[0].date)}
           {slides.at(-1)!.date - slides[0].date > 864e5 / 2 && <> 〜 {formatDate(slides.at(-1)!.date)}</>}
           <br />
-          {memCount}つの思い出
+          {memCount}件の思い出
         </p>
         <button
           className="btn primary big"

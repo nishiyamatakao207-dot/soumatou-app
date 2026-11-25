@@ -1,51 +1,31 @@
-import { useEffect, useMemo, useState } from 'react';
-import { listDatedItems, listTags, type DatedItem } from '../data/repository';
-import type { MediaItem, Memory } from '../data/types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { listDatedItems, listTags } from '../data/repository';
 import { FilterBar } from '../components/FilterBar';
-import { Thumb } from '../components/Thumb';
 import { describeFilter, filterFromQuery, filterToQuery, toMemoryFilter, type FilterState } from '../lib/filter';
-import { dayKey, formatDate, formatMonth } from '../lib/format';
+import { groupByMonth, monthKeyOf, monthLabel, toEntries, type Entry } from '../lib/entries';
 import { navigate } from '../router';
 import { startVoice } from '../lib/voiceSession';
 import { StarSky } from '../components/StarSky';
 import { OnThisDayCard } from '../components/OnThisDayCard';
 import { LetterShelf } from '../components/LetterShelf';
 import { BackupReminder } from '../components/BackupReminder';
+import { EntryCard } from '../components/timeline/EntryCard';
+import { MonthPicker } from '../components/timeline/MonthPicker';
+import { MonthScrubber } from '../components/timeline/MonthScrubber';
+import { CalendarView } from '../components/timeline/CalendarView';
 
-/** 一覧の1枚のカード：1つの記録のうち、同じ日の写真・動画のまとまり */
-interface Entry {
-  key: string;
-  memory: Memory;
-  media: MediaItem[];
-  date: number;
-  /** 同じ記録に、別の日のカードもある */
-  split: boolean;
-  /** 気持ちがまだ入っていない記録 */
-  needsFeeling: boolean;
-}
+type View = 'list' | 'calendar';
+const VIEW_KEY = 'meguru.view';
+const readView = (): View => {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'calendar' ? 'calendar' : 'list';
+  } catch {
+    return 'list';
+  }
+};
 
-/** 写真1枚ごとの日付で、記録を「日ごと」のカードに分けて新しい順に並べる */
-function toEntries(items: DatedItem[]): Entry[] {
-  // 記録ごとに、気持ち（ひとこと・写真のコメント）が入っているか
-  const feeling = new Map<string, boolean>();
-  for (const it of items) {
-    const has = !!it.memory.text.trim() || !!it.media?.caption?.trim();
-    feeling.set(it.memory.id, (feeling.get(it.memory.id) ?? false) || has);
-  }
-  const map = new Map<string, Entry>();
-  for (const it of items) {
-    const key = `${it.memory.id}|${dayKey(it.date)}`;
-    let e = map.get(key);
-    if (!e) map.set(key, (e = { key, memory: it.memory, media: [], date: it.date, split: false, needsFeeling: !feeling.get(it.memory.id) }));
-    if (it.media) e.media.push(it.media);
-    e.date = Math.min(e.date, it.date);
-  }
-  const entries = [...map.values()];
-  const perMemory = new Map<string, number>();
-  entries.forEach((e) => perMemory.set(e.memory.id, (perMemory.get(e.memory.id) ?? 0) + 1));
-  entries.forEach((e) => (e.split = (perMemory.get(e.memory.id) ?? 0) > 1));
-  return entries.sort((a, b) => b.date - a.date);
-}
+/** 上の帯（見出しの下に隠れない位置へ移動するため） */
+const topOffset = () => (document.querySelector('.topbar')?.getBoundingClientRect().height ?? 60) + 2;
 
 export function Timeline({ query }: { query: string }) {
   const filter = useMemo(() => filterFromQuery(query), [query]);
@@ -53,37 +33,109 @@ export function Timeline({ query }: { query: string }) {
   const [tags, setTags] = useState<string[]>([]);
   /** 気持ちが未入力の記録だけを表示 */
   const [onlyMissing, setOnlyMissing] = useState(false);
+  const [view, setViewState] = useState<View>(readView);
+  const [picker, setPicker] = useState(false);
+  const [calMonth, setCalMonth] = useState<string>();
+  const [current, setCurrent] = useState<string>();
 
   useEffect(() => {
-    listDatedItems(toMemoryFilter(filter)).then((items) => setEntries(toEntries(items)));
+    let alive = true;
+    listDatedItems(toMemoryFilter(filter)).then((items) => alive && setEntries(toEntries(items)));
+    return () => {
+      alive = false;
+    };
   }, [filter]);
   useEffect(() => {
     listTags().then(setTags);
   }, []);
 
   const setFilter = (f: FilterState) => navigate(`/?${filterToQuery(f)}`, true);
+  const setView = (v: View) => {
+    setViewState(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* 保存できなくても今回は切り替わる */
+    }
+  };
+
+  // ---- 検索（打つたびに少し待ってから探す）
+  const [q, setQ] = useState(filter.q ?? '');
+  /** 最後にこの画面から検索した言葉（打っている途中の文字を、画面の切り替わりで上書きしないため） */
+  const sent = useRef(filter.q ?? '');
+  useEffect(() => {
+    if ((filter.q ?? '') !== sent.current) {
+      sent.current = filter.q ?? '';
+      setQ(filter.q ?? '');
+    }
+  }, [filter.q]);
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
+  useEffect(() => {
+    const want = q.trim();
+    if ((filterRef.current.q ?? '') === want) return;
+    const t = setTimeout(() => {
+      sent.current = want;
+      navigate(`/?${filterToQuery({ ...filterRef.current, q: want || undefined })}`, true);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+  const searching = !!filter.q;
 
   const missingCount = useMemo(() => new Set((entries ?? []).filter((e) => e.needsFeeling).map((e) => e.memory.id)).size, [entries]);
   const shown = useMemo(() => (onlyMissing ? (entries ?? []).filter((e) => e.needsFeeling) : entries ?? []), [entries, onlyMissing]);
+  const groups = useMemo(() => groupByMonth(shown), [shown]);
+  const months = useMemo(() => groups.map((g) => ({ key: g.key, count: g.items.length })), [groups]);
 
-  const groups = useMemo(() => {
-    const g: { month: string; items: Entry[] }[] = [];
-    for (const e of shown) {
-      const month = formatMonth(e.date);
-      if (g.at(-1)?.month !== month) g.push({ month, items: [] });
-      g.at(-1)!.items.push(e);
-    }
-    return g;
-  }, [shown]);
+  // ---- 月へ移動
+  const jumpTo = useCallback((key: string) => {
+    const el = document.getElementById(`m-${key}`);
+    if (!el) return;
+    window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - topOffset(), behavior: 'auto' });
+    setCurrent(key);
+  }, []);
+  const pick = (key: string) => {
+    setPicker(false);
+    if (view === 'calendar') setCalMonth(key);
+    else requestAnimationFrame(() => jumpTo(key));
+  };
+
+  // ---- 今見えている月（右端のスクロールバーの印に使う）
+  useEffect(() => {
+    if (view !== 'list' || !groups.length) return;
+    let raf = 0;
+    const on = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const top = topOffset() + 8;
+        let cur = groups[0].key;
+        for (const g of groups) {
+          const el = document.getElementById(`m-${g.key}`);
+          if (!el) continue;
+          if (el.getBoundingClientRect().top <= top) cur = g.key;
+          else break;
+        }
+        setCurrent(cur);
+      });
+    };
+    on();
+    window.addEventListener('scroll', on, { passive: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('scroll', on);
+    };
+  }, [groups, view]);
 
   /** 「声で入力」：iPhone ではこのタップの中で録音を始める必要がある */
   const recordVoice = () => {
     startVoice();
     navigate('/new?voice=1');
   };
-  const openEntry = (e: Entry) => navigate(`/edit/${encodeURIComponent(e.memory.id)}`);
 
-  const hasFilter = filter.tags.length > 0 || filter.period !== 'all';
+  const hasFilter = filter.tags.length > 0 || filter.period !== 'all' || searching;
+  const calendarMonth = calMonth ?? groups[0]?.key ?? monthKeyOf(Date.now());
+  const memoryCount = useMemo(() => new Set(shown.map((e) => e.memory.id)).size, [shown]);
+  const searchBox = useRef<HTMLInputElement>(null);
 
   return (
     <div className="screen">
@@ -102,19 +154,74 @@ export function Timeline({ query }: { query: string }) {
         </div>
       </header>
 
-      <StarSky />
-      <LetterShelf />
-      <OnThisDayCard />
-      <BackupReminder />
+      <div className="search-bar">
+        <form
+          className="search-box"
+          role="search"
+          onSubmit={(e) => {
+            e.preventDefault();
+            searchBox.current?.blur();
+            sent.current = q.trim();
+            setFilter({ ...filter, q: q.trim() || undefined });
+          }}
+        >
+          <span aria-hidden="true">🔍</span>
+          <input
+            ref={searchBox}
+            type="search"
+            enterKeyHint="search"
+            placeholder="言葉・タグで探す"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            aria-label="言葉やタグで探す"
+          />
+          {q && (
+            <button type="button" className="search-clear" aria-label="検索をやめる" onClick={() => ((sent.current = ''), setQ(''), setFilter({ ...filter, q: undefined }))}>
+              ✕
+            </button>
+          )}
+        </form>
+        <div className="view-switch" role="tablist" aria-label="表示">
+          <button role="tab" aria-selected={view === 'list'} className={view === 'list' ? 'on' : ''} onClick={() => setView('list')}>
+            一覧
+          </button>
+          <button role="tab" aria-selected={view === 'calendar'} className={view === 'calendar' ? 'on' : ''} onClick={() => {
+              setView('calendar');
+              // カレンダーが上の飾りの下に隠れないよう、見える位置へ
+              requestAnimationFrame(() => {
+                const el = document.querySelector('.calendar, .timeline');
+                if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - topOffset() - 8 });
+              });
+            }}>
+            カレンダー
+          </button>
+        </div>
+      </div>
+
+      {!searching && (
+        <>
+          <StarSky />
+          <LetterShelf />
+          <OnThisDayCard />
+          <BackupReminder />
+        </>
+      )}
 
       <FilterBar value={filter} onChange={setFilter} tags={tags} />
       {hasFilter && (
-        <p className="filter-note">
-          {describeFilter(filter)}（{entries?.length ?? 0}件）
-          <button className="link" onClick={() => setFilter({ tags: [], period: 'all' })}>
+        <div className="filter-note">
+          <span>
+            {describeFilter(filter)}（{entries ? `${memoryCount}件` : '探しています…'}）
+          </span>
+          {!!entries?.length && (
+            <button className="btn small primary" onClick={() => navigate(`/play?${filterToQuery(filter)}`)}>
+              ▶ この結果を再生
+            </button>
+          )}
+          <button className="link" onClick={() => ((sent.current = ''), setQ(''), setFilter({ tags: [], period: 'all' }))}>
             解除
           </button>
-        </p>
+        </div>
       )}
 
       {(missingCount > 0 || onlyMissing) && (
@@ -137,10 +244,12 @@ export function Timeline({ query }: { query: string }) {
         </div>
       )}
 
-      <main className="timeline">
+      <main className={`timeline ${view === 'list' && months.length >= 3 ? 'with-scrubber' : ''}`}>
         {entries && entries.length === 0 && (
           <div className="empty">
-            {hasFilter ? (
+            {searching ? (
+              <p>「{filter.q}」に合う記録は見つかりませんでした。別の言葉やタグでお試しください。</p>
+            ) : hasFilter ? (
               <p>この条件の思い出はまだありません。</p>
             ) : (
               <>
@@ -150,47 +259,32 @@ export function Timeline({ query }: { query: string }) {
             )}
           </div>
         )}
-        {groups.map((g) => (
-          <section key={g.month}>
-            <h2 className="month">{g.month}</h2>
-            {g.items.map((e) => {
-              const text = e.media.find((m) => m.caption)?.caption || e.memory.text;
-              return (
-                <div
-                  key={e.key}
-                  className={`card ${e.needsFeeling ? 'no-feeling' : ''}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => openEntry(e)}
-                  onKeyDown={(ev) => (ev.key === 'Enter' || ev.key === ' ') && openEntry(e)}
-                >
-                  <div className="card-media">
-                    {e.media[0] ? <Thumb item={e.media[0]} /> : <div className="thumb text-only">✎</div>}
-                    {e.media.length > 1 && <span className="count">{e.media.length}</span>}
-                  </div>
-                  <div className="card-body">
-                    <div className="card-date">{formatDate(e.date)}</div>
-                    {text && <p className="card-text">{text}</p>}
-                    {e.memory.tags.length > 0 && <div className="card-tags">{e.memory.tags.map((t) => `#${t}`).join(' ')}</div>}
-                    {e.split && <div className="card-split">ほかの日の写真も同じ記録にあります</div>}
-                    {e.needsFeeling && (
-                      <button
-                        className="btn small add-feel"
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          navigate(`/feel/${encodeURIComponent(e.memory.id)}`);
-                        }}
-                      >
-                        ✎ 気持ちを足す
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </section>
-        ))}
+        {view === 'calendar' && !!entries?.length && (
+          <CalendarView entries={shown} month={calendarMonth} onMonth={setCalMonth} onPickMonth={() => setPicker(true)} />
+        )}
+        {view === 'list' &&
+          groups.map((g) => (
+            <section key={g.key} id={`m-${g.key}`} className="month-section">
+              <button className="month" onClick={() => setPicker(true)} aria-label={`${monthLabel(g.key)}（タップで年・月を選んで移動）`}>
+                {monthLabel(g.key)}
+                <span className="month-count">{g.items.length}件 ▾</span>
+              </button>
+              {g.items.map((e) => (
+                <EntryCard key={e.key} e={e} />
+              ))}
+            </section>
+          ))}
       </main>
+
+      {view === 'list' && months.length >= 3 && <MonthScrubber months={months.map((m) => m.key)} current={current} onJump={jumpTo} />}
+      {picker && (
+        <MonthPicker
+          months={months}
+          current={view === 'calendar' ? calendarMonth : current}
+          onPick={pick}
+          onClose={() => setPicker(false)}
+        />
+      )}
 
       <div className="record-bar">
         <button className="btn primary big voice-btn" onClick={recordVoice}>

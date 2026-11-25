@@ -21,6 +21,8 @@ export interface FilterState {
   day?: string;
   /** この記録だけ（未来への手紙を開けたあとに流す） */
   memory?: string;
+  /** キーワード検索（気持ちの言葉とタグ） */
+  q?: string;
 }
 
 /** 2/29 の記録は、うるう年でない年は 2/28 に出す */
@@ -32,6 +34,11 @@ export function monthDaysFor(day: string, year = new Date().getFullYear()): stri
 export const EMPTY_FILTER: FilterState = { tags: [], period: 'all' };
 
 export function toMemoryFilter(f: FilterState): MemoryFilter {
+  const base = baseMemoryFilter(f);
+  return f.q?.trim() ? { ...base, keyword: f.q.trim() } : base;
+}
+
+function baseMemoryFilter(f: FilterState): MemoryFilter {
   const y = new Date().getFullYear();
   if (f.memory) return { tags: [], memoryId: f.memory };
   if (f.day) {
@@ -65,6 +72,7 @@ export function filterToQuery(f: FilterState): string {
   if (f.to) q.set('to', f.to);
   if (f.day) q.set('day', f.day);
   if (f.memory) q.set('memory', f.memory);
+  if (f.q?.trim()) q.set('q', f.q.trim());
   return q.toString();
 }
 
@@ -77,6 +85,7 @@ export function filterFromQuery(s: string): FilterState {
     to: q.get('to') ?? undefined,
     day: q.get('day') ?? undefined,
     memory: q.get('memory') ?? undefined,
+    q: q.get('q') ?? undefined,
   };
 }
 
@@ -89,5 +98,6 @@ export function describeFilter(f: FilterState): string {
   const parts: string[] = [];
   if (f.period !== 'all') parts.push(f.period === 'custom' ? `${f.from ?? ''}〜${f.to ?? ''}` : PERIOD_LABELS[f.period]);
   if (f.tags.length) parts.push(f.tags.map((t) => `#${t}`).join(' '));
+  if (f.q?.trim()) parts.push(`「${f.q.trim()}」で検索`);
   return parts.join(' ・ ') || 'すべての思い出';
 }
