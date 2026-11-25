@@ -100,8 +100,15 @@ interface Session {
   retries: number;
   /** 何回目の区切りか */
   segments: number;
+  /** 今の区切りで start() を呼んだ時刻と、声を見つけたか */
+  segStart: number;
+  segSpeech: boolean;
+  /** start() のすぐあとに「聞き始めた」が来た（iPhone で、マイクの音が届いていないときの様子） */
+  segInstant: boolean;
   wait?: number;
   grace?: number;
+  stuck?: number;
+  recover?: number;
   stopTimer?: number;
 }
 
@@ -115,12 +122,15 @@ const MESSAGES: Record<string, string> = {
   network: '音声を文字にするサービスにつながりませんでした。ネットにつながっているか確認してください',
 };
 const NOT_HEARD = 'うまく聞き取れませんでした。もう一度押してください';
+const STUCK = 'iPhoneの音声入力が、少しの間反応しなくなっています。30秒ほど待ってから、もう一度押してください';
 
-/** 部品の知らせを外して止め、捨てる（古い部品の知らせが、新しい音声入力を邪魔しないように） */
-function discard(rec: Recognition | null) {
+/** 部品の知らせを外して止め、捨てる（古い部品の知らせが、新しい音声入力を邪魔しないように）。
+ * ended：もう自然に止まっている（止める操作をしない。iPhone では止める操作のあと反応しなくなることがある） */
+function discard(rec: Recognition | null, ended = false) {
   if (!rec) return;
   rec.onstart = rec.onresult = rec.onerror = rec.onend = null;
   rec.onaudiostart = rec.onspeechstart = rec.onspeechend = rec.onaudioend = rec.onnomatch = null;
+  if (ended) return;
   try {
     rec.abort?.();
   } catch {
@@ -128,7 +138,49 @@ function discard(rec: Recognition | null) {
   }
 }
 
+/*
+ * iPhone では、停止ボタンなどで音声認識を途中で止める（stop・abort）と、そのあとしばらく
+ * 「聞き始めた」と出るのに声が届かない状態になる（記録で確かめた）。一言が自然に終わったあとなら、
+ * すぐ次を始めても大丈夫だった。そこで iPhone では途中で止めず、画面の上だけ終わらせて、
+ * 音声認識が自然に止まるのを裏で待つ（その間の言葉は使わない）。次に押されたら、止まるのを待ってから始める。
+ */
+let draining: Recognition | null = null;
+let drainTimer: number | undefined;
+const drainWaiters: (() => void)[] = [];
+const DRAIN_MAX_MS = 12000;
+
+function drainDone(rec: Recognition, how: string) {
+  if (draining !== rec) return;
+  clearTimeout(drainTimer);
+  log(`止めた音声認識が${how}`);
+  discard(rec, true);
+  draining = null;
+  drainWaiters.splice(0).forEach((f) => f());
+}
+
+/** 音声認識を、途中で止めずに手放す（iPhone）。自然に止まるまで待つ */
+function letGo(rec: Recognition) {
+  if (draining && draining !== rec) discard(draining);
+  draining = rec;
+  rec.onresult = () => log('（止めたあとの言葉は使わない）');
+  rec.onerror = (e) => log(`（止めたあと）error ${e.error}`);
+  rec.onend = () => drainDone(rec, '自然に止まった');
+  rec.onstart = rec.onaudiostart = rec.onspeechstart = rec.onspeechend = rec.onaudioend = rec.onnomatch = null;
+  clearTimeout(drainTimer);
+  drainTimer = window.setTimeout(() => {
+    if (draining !== rec) return;
+    try {
+      rec.abort?.();
+    } catch {
+      /* 止まっている */
+    }
+    drainDone(rec, `${DRAIN_MAX_MS / 1000}秒たっても止まらないので止めた`);
+  }, DRAIN_MAX_MS);
+}
+
 function clearTimers(s: Session) {
+  clearTimeout(s.stuck);
+  clearTimeout(s.recover);
   clearTimeout(s.wait);
   clearTimeout(s.grace);
   clearTimeout(s.stopTimer);
@@ -155,17 +207,18 @@ const fallbackHint = () =>
     ? '（ホーム画面から開いたアプリでは、iPhoneの仕組みで音声入力が使えないことがあります。Safariで開くか、キーボードのマイクボタン🎙で話してください）'
     : '（キーボードのマイクボタン🎙でも、話して入力できます）';
 
-/** 音声入力を終える（エラーがあれば知らせる） */
-function finish(s: Session, error?: string) {
+/** 音声入力を終える（エラーがあれば知らせる）。gentle：iPhone では途中で止めずに手放す */
+function finish(s: Session, error?: string, gentle = false) {
   if (session !== s) return;
   clearTimers(s);
-  discard(s.rec);
+  if (s.rec && gentle && isIOS()) letGo(s.rec);
+  else discard(s.rec);
   s.rec = null;
   flushInterim(s);
   session = null;
   log(`終わり${error ? `（${error}）` : ''}`);
   s.h.onListening(false);
-  if (error) s.h.onError(error === NOT_HEARD || error.startsWith('音声入力が使えない') || error.startsWith('音声入力を始められ') ? `${error}${fallbackHint()}` : error);
+  if (error) s.h.onError(error === NOT_HEARD || error === STUCK || error.startsWith('音声入力が使えない') || error.startsWith('音声入力を始められ') ? `${error}${fallbackHint()}` : error);
 }
 
 /** 文字が返らないとき：最初なら1回だけ自動でやり直す。続きの区切りなら、話し終わったとみなして終える */
@@ -174,14 +227,33 @@ function noResult(s: Session, why: string) {
   if (s.gotAny) {
     log(`${why} → 話し終わったとみなして終える`);
     finish(s);
-  } else if (s.retries < 1) {
+  } else if (s.retries >= 2 && s.segInstant) {
+    log(`${why} → あきらめる（マイクの音が届いていない様子）`);
+    finish(s, STUCK);
+  } else if (s.retries < 2) {
     s.retries++;
-    log(`${why} → 新しい部品で自動でやり直す`);
-    startSegment(s);
+    recoverAndRetry(s, why);
   } else {
     log(`${why} → あきらめる`);
     finish(s, NOT_HEARD);
   }
+}
+
+/**
+ * マイクの設定を切り替え直し、少し待ってから新しい部品でやり直す。
+ * iPhone では、前の音声入力のあと、マイクの音が新しい部品に届かなくなることがあるため。
+ */
+function recoverAndRetry(s: Session, why: string) {
+  discard(s.rec);
+  s.rec = null;
+  clearTimeout(s.wait);
+  clearTimeout(s.stuck);
+  log(`${why} → マイクの設定を切り替え直して、自動でやり直す（${s.retries}回目）（${prepareForMicrophone()}）`);
+  s.recover = window.setTimeout(() => {
+    if (session !== s) return;
+    if (s.stopping) return finish(s);
+    startSegment(s);
+  }, 600);
 }
 
 /** 区切りが終わった（「止まった」が来た、または来ないまま時間がたった） */
@@ -190,14 +262,14 @@ function segmentEnded(s: Session) {
   clearTimeout(s.grace);
   clearTimeout(s.wait);
   flushInterim(s);
-  discard(s.rec);
+  discard(s.rec, true);
   s.rec = null;
   if (s.stopping) return finish(s);
   if (!s.segGot) return noResult(s, '文字が返らないまま止まった');
   if (Date.now() - s.began > MAX_SESSION_MS) return finish(s);
   // 続きを聞く（区切りごとに新しい部品で）
   s.segments++;
-  log(`区切り${s.segments} → 続きを聞く`);
+  log(`区切り${s.segments} → 続きを聞く（${prepareForMicrophone()}）`);
   startSegment(s);
 }
 
@@ -223,6 +295,9 @@ function startSegment(s: Session) {
   s.rec = null;
   s.segGot = false;
   s.segInterim = '';
+  s.segSpeech = false;
+  s.segInstant = false;
+  clearTimeout(s.stuck);
   const Ctor = ctor()!;
   const rec = new Ctor();
   rec.lang = 'ja-JP';
@@ -230,9 +305,28 @@ function startSegment(s: Session) {
   rec.interimResults = true;
   rec.maxAlternatives = 1;
   const live = () => session === s && s.rec === rec;
-  rec.onstart = () => live() && log('onstart（聞き始めた）');
+  rec.onstart = () => {
+    if (!live()) return;
+    const ms = Date.now() - s.segStart;
+    s.segInstant = ms < 150;
+    log(`onstart（聞き始めた・${ms}ミリ秒後）`);
+    // iPhone：すぐに「聞き始めた」が来て、そのあと声が届かないときは、マイクの音が来ていない。早めにやり直す
+    if (s.segInstant && !s.gotAny) {
+      s.stuck = window.setTimeout(() => {
+        if (!live() || s.segSpeech || s.segGot) return;
+        if (s.retries < 2) {
+          s.retries++;
+          recoverAndRetry(s, '4秒たっても声が届かない（すぐに聞き始めた＝マイクの音が来ていない様子）');
+        }
+      }, 4000);
+    }
+  };
   rec.onaudiostart = () => live() && log('audiostart（マイクから音が来た）');
-  rec.onspeechstart = () => live() && log('speechstart（声を見つけた）');
+  rec.onspeechstart = () => {
+    if (!live()) return;
+    s.segSpeech = true;
+    log('speechstart（声を見つけた）');
+  };
   rec.onspeechend = () => live() && log('speechend');
   rec.onaudioend = () => live() && log('audioend');
   rec.onnomatch = () => live() && log('nomatch（言葉にできなかった）');
@@ -268,7 +362,7 @@ function startSegment(s: Session) {
     log(`error ${e.error}${e.message ? ` (${e.message})` : ''}`);
     if (e.error === 'aborted') return;
     if (e.error === 'no-speech' || e.error === 'nomatch') {
-      discard(rec);
+      discard(rec, true);
       s.rec = null;
       clearTimeout(s.wait);
       clearTimeout(s.grace);
@@ -289,6 +383,7 @@ function startSegment(s: Session) {
   };
   s.rec = rec;
   try {
+    s.segStart = Date.now();
     rec.start();
     log(`start()（${s.segments ? `続き${s.segments}` : s.retries ? 'やり直し' : '最初'}・新しい部品・一言ずつ）`);
   } catch (e) {
@@ -296,6 +391,10 @@ function startSegment(s: Session) {
     discard(rec);
     s.rec = null;
     if (s.gotAny) return finish(s);
+    if (s.retries < 2) {
+      s.retries++;
+      return recoverAndRetry(s, 'start() に失敗');
+    }
     return finish(s, '音声入力を始められませんでした。少し待ってから、もう一度押してください');
   }
   armWait(s, s.gotAny ? NEXT_WAIT_MS : FIRST_WAIT_MS, s.gotAny ? '続きの言葉が来ない' : `${FIRST_WAIT_MS / 1000}秒たっても文字が返らない`);
@@ -309,30 +408,42 @@ export function startSpeech(owner: object, h: SpeechHandlers): boolean {
   }
   count++;
   // 前の音声入力が残っていたら、確実に終える
-  if (session) finish(session);
+  if (session) finish(session, undefined, true);
   // 再生中の音楽・動画を止める（聞いている途中に再生や一時停止が起きると、iPhone では止まってしまう）
   const paused = pauseAllMedia();
   log(`--- ${count}回目：開始ボタン（${prepareForMicrophone()}${paused ? `・再生を${paused}つ止めた` : ''}）`);
-  const s: Session = { owner, h, n: count, began: Date.now(), rec: null, stopping: false, gotAny: false, segGot: false, segInterim: '', retries: 0, segments: 0 };
+  const s: Session = { owner, h, n: count, began: Date.now(), rec: null, stopping: false, gotAny: false, segGot: false, segInterim: '', retries: 0, segments: 0, segStart: 0, segSpeech: false, segInstant: false };
   session = s;
   h.onListening(true);
-  startSegment(s);
+  if (draining) {
+    log('前の音声認識が自然に止まるのを待ってから始める');
+    drainWaiters.push(() => {
+      if (session !== s) return;
+      if (s.stopping) return finish(s);
+      log(`前の音声認識が止まった → 始める（${prepareForMicrophone()}）`);
+      startSegment(s);
+    });
+  } else startSegment(s);
   return session === s;
 }
 
-/** 話し終わった：止める（最後の言葉は届く）。止まらなければ少し待って終わらせる */
+/** 話し終わった：止める */
 export function stopSpeech(owner?: object) {
   const s = session;
   if (!s || (owner && s.owner !== owner)) return;
   log('停止ボタン');
   s.stopping = true;
+  if (!s.rec) return finish(s);
+  if (isIOS()) {
+    // iPhone：途中で止めない。聞こえた途中の文字を確定として、画面の上だけ終わらせる
+    return finish(s, undefined, true);
+  }
   clearTimeout(s.wait);
   try {
-    s.rec?.stop();
+    s.rec.stop();
   } catch {
     /* 止まっている */
   }
-  if (!s.rec) return finish(s);
   s.stopTimer = window.setTimeout(() => {
     if (session === s) {
       log(`${END_GRACE_MS / 1000}秒たっても止まらない → 終える`);
@@ -343,7 +454,7 @@ export function stopSpeech(owner?: object) {
 
 /** 画面を離れるとき：その画面の音声入力だけを止める */
 export function releaseSpeech(owner: object) {
-  if (session?.owner === owner) finish(session);
+  if (session?.owner === owner) finish(session, undefined, true);
 }
 
 /** 診断画面に出す、この端末の情報 */

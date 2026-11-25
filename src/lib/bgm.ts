@@ -96,6 +96,8 @@ export function prepareForMicrophone(): string {
   if (!s) return 'audioSessionなし';
   const before = s.type;
   try {
+    // すでにマイク用の設定でも、一度切り替え直す（iPhone で、2回目以降にマイクの音が届かなくなるのを防ぐため）
+    if (s.type === 'play-and-record') s.type = 'auto';
     s.type = 'play-and-record';
   } catch {
     try {
