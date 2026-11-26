@@ -1,19 +1,37 @@
 import { useEffect, useState } from 'react';
 import { db } from '../data/db';
-import { lastBackupAt, shouldRemindBackup, snoozeBackupReminder } from '../lib/backup';
+import { backupReminderReason, lastBackupAt, snoozeBackupReminder, type BackupReason } from '../lib/backup';
+import { formatDate } from '../lib/format';
 import { navigate } from '../router';
 
-/** 一覧のバックアップのおすすめ（ずっと作っていないときだけ、控えめに） */
+/** 一覧のバックアップのおすすめ（必要なときだけ、そっと） */
 export function BackupReminder() {
-  const [show, setShow] = useState(false);
+  const [reason, setReason] = useState<BackupReason | null>(null);
+  const [added, setAdded] = useState(0);
   useEffect(() => {
-    db.memories.count().then((n) => setShow(shouldRemindBackup(n)));
+    (async () => {
+      const last = lastBackupAt() ?? 0;
+      let total = 0;
+      let fresh = 0;
+      await db.memories.each((m) => {
+        total++;
+        if (m.createdAt > last) fresh++;
+      });
+      setAdded(fresh);
+      setReason(backupReminderReason(total, fresh));
+    })();
   }, []);
-  if (!show) return null;
-  const never = !lastBackupAt();
+  if (!reason) return null;
+  const last = lastBackupAt();
+  const text =
+    reason === 'never'
+      ? '大切な思い出を守るために、バックアップを作りませんか？'
+      : reason === 'many'
+        ? `前回のバックアップから、新しい記録が${added}件増えました。バックアップを作りませんか？`
+        : `前回のバックアップ（${last ? formatDate(last) : ''}）から1か月たちました。バックアップを作りませんか？`;
   return (
     <div className="backup-reminder">
-      <span>{never ? '大切な思い出を守るために、バックアップを作りませんか？' : '前回のバックアップから30日以上たちました'}</span>
+      <span>{text}</span>
       <div className="row">
         <button className="btn small primary" onClick={() => navigate('/backup')}>
           バックアップ
@@ -22,7 +40,7 @@ export function BackupReminder() {
           className="btn small ghost"
           onClick={() => {
             snoozeBackupReminder();
-            setShow(false);
+            setReason(null);
           }}
         >
           あとで

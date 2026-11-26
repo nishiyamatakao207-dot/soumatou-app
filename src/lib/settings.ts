@@ -33,9 +33,11 @@ export interface Settings {
   photoSec: number;
   /** 字幕が長い写真は、自動で表示時間を延ばす */
   autoLongCaption: boolean;
+  /** 動画を取り込むとき、720p に縮めて保存する */
+  videoCompress: boolean;
 }
 
-const DEFAULTS: Settings = { showDate: true, bgm: 'calm', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode', exportVideoSound: true, voiceMethod: 'auto', photoSec: 7, autoLongCaption: true };
+const DEFAULTS: Settings = { showDate: true, bgm: 'calm', customBgmName: '', lastTags: [], dailyDigest: true, onThisDay: true, photoShape: 'circle', exportQuality: 'standard', exportMode: 'encode', exportVideoSound: true, voiceMethod: 'auto', photoSec: 7, autoLongCaption: true, videoCompress: true };
 
 /** 画面の外（起動時の判定など）から設定を読む */
 export const readSetting = <K extends keyof Settings>(key: K): Settings[K] => read()[key];

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { BgmPicker } from '../components/BgmPicker';
 import { ShapePicker } from '../components/ShapePicker';
 import { PhotoTimePicker } from '../components/PhotoTimePicker';
+import { StorageCard } from '../components/StorageCard';
 import { digestAvailable } from '../lib/digest';
 import { useSetting } from '../lib/settings';
 import { navigate } from '../router';
@@ -14,6 +15,7 @@ export function Settings() {
   const [showDate, setShowDate] = useSetting('showDate');
   const [onThisDay, setOnThisDay] = useSetting('onThisDay');
   const [voiceMethod, setVoiceMethod] = useSetting('voiceMethod');
+  const [videoCompress, setVideoCompress] = useSetting('videoCompress');
   const [canDigest, setCanDigest] = useState(false);
   const last = lastBackupAt();
   useEffect(() => {
@@ -102,10 +104,34 @@ export function Settings() {
           </div>
         </section>
         <section className="setting">
+          <StorageCard />
+        </section>
+        <section className="setting">
+          <fieldset className="choice bare">
+            <legend>
+              <strong>動画を取り込むとき</strong>
+            </legend>
+            <label className="choice-row">
+              <input type="radio" name="videoCompress" checked={videoCompress} onChange={() => setVideoCompress(true)} />
+              <span>
+                <strong>縮めて保存する（おすすめ）</strong>
+                <small>スマホで見るのに十分な画質（720p）にします。容量が約5分の1〜10分の1になり、1分の動画で約20MBです。縮めるのに少し時間がかかります</small>
+              </span>
+            </label>
+            <label className="choice-row">
+              <input type="radio" name="videoCompress" checked={!videoCompress} onChange={() => setVideoCompress(false)} />
+              <span>
+                <strong>元の画質のまま保存する</strong>
+                <small>きれいなまま残せますが、容量を多く使います（1分で約60〜170MB。100MBまで）</small>
+              </span>
+            </label>
+          </fieldset>
+        </section>
+        <section className="setting">
           <div className="setting-row" onClick={() => navigate('/backup')} role="button" tabIndex={0}>
             <span>
               <strong>バックアップ</strong>
-              <small>{last ? `最後のバックアップ：${formatDate(last)}` : 'まだバックアップしていません'}</small>
+              <small>{last ? `前回のバックアップ：${formatDate(last)}` : 'まだバックアップしていません'}</small>
             </span>
             <span className="chev">›</span>
           </div>

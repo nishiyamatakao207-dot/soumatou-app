@@ -132,10 +132,11 @@ export async function saveMemory(memory: Memory, media: MediaDraft[]): Promise<v
     if (d.file) files.push(await toStored(d.id, d.file));
     if (d.thumbFile) files.push(await toStored(thumbKey(d.id), d.thumbFile));
   }
-  const rows: MediaItem[] = media.map(({ file: _f, thumbFile, missing: _m, ...m }) => ({
+  const rows: MediaItem[] = media.map(({ file, thumbFile, missing: _m, ...m }) => ({
     ...m,
     memoryId: memory.id,
     hasThumb: thumbFile ? true : m.hasThumb,
+    bytes: file ? file.size + (thumbFile?.size ?? 0) : m.bytes,
   }));
 
   await db.transaction('rw', [db.memories, db.media, db.files], async () => {

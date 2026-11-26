@@ -1,16 +1,25 @@
 import exifr from 'exifr/dist/lite.esm.mjs';
 import { newId } from '../data/repository';
 import type { MediaDraft } from '../data/types';
+import { readSetting } from './settings';
 
 const PHOTO_MAX = 2048; // 保存する写真の長辺（容量節約）
 const THUMB_MAX = 480;
+/** 保存する動画の大きさの上限（縮めたあと） */
 export const MAX_VIDEO_MB = 100;
+/** 縮めるときに受け付ける、元の動画の大きさの上限 */
+const MAX_SOURCE_MB = 2000;
+
+/** 取り込みの進み具合（動画を縮めているとき） */
+export type ImportProgress = (ratio: number) => void;
 
 /** 選んだファイルを、保存用のメディアに変換する */
-export async function importFile(file: File): Promise<MediaDraft> {
-  if (file.type.startsWith('video/') || /\.(mov|mp4|m4v)$/i.test(file.name)) return importVideo(file);
+export async function importFile(file: File, onProgress?: ImportProgress): Promise<MediaDraft> {
+  if (isVideoFile(file)) return importVideo(file, onProgress);
   return importPhoto(file);
 }
+
+export const isVideoFile = (file: File) => file.type.startsWith('video/') || /\.(mov|mp4|m4v)$/i.test(file.name);
 
 /**
  * 写真はいつも JPEG にして保存する。
@@ -57,17 +66,34 @@ async function decodeImage(file: Blob): Promise<{ image: CanvasImageSource; widt
   }
 }
 
-async function importVideo(file: File): Promise<MediaDraft> {
-  if (file.size > MAX_VIDEO_MB * 1024 * 1024) {
-    throw new Error(`${MAX_VIDEO_MB}MBを超える動画は追加できません（短めの動画がおすすめです）`);
+async function importVideo(file: File, onProgress?: ImportProgress): Promise<MediaDraft> {
+  const compress = readSetting('videoCompress');
+  const MB = 1024 * 1024;
+  if (file.size > (compress ? MAX_SOURCE_MB : MAX_VIDEO_MB) * MB) {
+    throw new Error(
+      compress
+        ? `${MAX_SOURCE_MB / 1000}GBを超える動画は追加できません（短めの動画がおすすめです）`
+        : `${MAX_VIDEO_MB}MBを超える動画は追加できません（設定で「動画を縮めて保存する」にすると、大きな動画も追加できます）`,
+    );
   }
+  // 撮影日と最初のコマは、元の動画から取る
   const videoDate = await readVideoDate(file).catch(() => undefined);
   const thumb = await videoFirstFrame(file).catch(() => undefined);
+  let blob: Blob | null = null;
+  if (compress) {
+    const { compressVideo } = await import('./videoCompress');
+    blob = (await compressVideo(file, onProgress).catch(() => null))?.blob ?? null;
+  }
+  // 縮めなかった（設定・もう小さい・この端末では縮められない）ときは、元のまま
+  if (!blob) {
+    if (file.size > MAX_VIDEO_MB * MB) throw new Error(`この動画は縮められず、${MAX_VIDEO_MB}MBを超えるため追加できませんでした`);
+    blob = new Blob([await file.arrayBuffer()], { type: file.type || 'video/mp4' });
+  }
   return {
     id: newId(),
     memoryId: '',
     kind: 'video',
-    file: new Blob([await file.arrayBuffer()], { type: file.type || 'video/mp4' }),
+    file: blob,
     thumbFile: thumb,
     hasThumb: !!thumb,
     ...pickDate(videoDate, 'video', file),

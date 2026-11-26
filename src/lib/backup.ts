@@ -158,23 +158,39 @@ export function markBackedUp() {
 }
 
 const SNOOZE_KEY = 'meguru.backup.snooze';
+/** 前回から1か月たったら */
 const REMIND_AFTER = 30 * 864e5;
+/** 前回から新しい記録がこれだけ増えたら */
+export const REMIND_NEW = 30;
+/** 「あとで」を押したら、しばらく（2週間）出さない */
+const SNOOZE_DAYS = 14;
 
-/** バックアップをおすすめするか：記録が3件以上あって、まだ作っていない／30日以上たった（「あとで」から7日は出さない） */
-export function shouldRemindBackup(memories: number): boolean {
-  if (memories < 3) return false;
+export type BackupReason = 'never' | 'month' | 'many';
+
+/**
+ * バックアップをおすすめするか、その理由。
+ * - まだ作っていない（記録が3件以上あるとき）
+ * - 前回から1か月たった
+ * - 前回から新しい記録が30件以上増えた
+ * 「あとで」から2週間は出さない
+ */
+export function backupReminderReason(memories: number, newSinceLast: number): BackupReason | null {
+  if (memories < 3) return null;
   try {
-    if (Number(localStorage.getItem(SNOOZE_KEY) ?? 0) > Date.now()) return false;
+    if (Number(localStorage.getItem(SNOOZE_KEY) ?? 0) > Date.now()) return null;
   } catch {
     /* 読めなくても判定は続ける */
   }
   const last = lastBackupAt();
-  return !last || Date.now() - last > REMIND_AFTER;
+  if (!last) return 'never';
+  if (newSinceLast >= REMIND_NEW) return 'many';
+  if (Date.now() - last > REMIND_AFTER) return 'month';
+  return null;
 }
 
 export function snoozeBackupReminder() {
   try {
-    localStorage.setItem(SNOOZE_KEY, String(Date.now() + 7 * 864e5));
+    localStorage.setItem(SNOOZE_KEY, String(Date.now() + SNOOZE_DAYS * 864e5));
   } catch {
     /* 保存できなくても動く */
   }

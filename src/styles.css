@@ -608,3 +608,21 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .bgm-group { display: grid; gap: 4px; margin-bottom: 6px; }
 .bgm-group-label { font-size: 12px; color: var(--muted); letter-spacing: .08em; }
 .bgm-picker.on-dark .bgm-group-label { color: rgba(255,243,223,.7); }
+
+/* ---- 使っている容量 ---- */
+.storage-card { display: grid; gap: 8px; }
+.storage-main { margin: 0; font-size: 22px; font-weight: 700; }
+.storage-main small { font-size: 13px; font-weight: normal; color: var(--muted); }
+.storage-bar { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--surface-2); }
+.storage-bar span { display: block; height: 100%; min-width: 0; }
+.storage-bar .photo, .dot.photo { background: var(--accent); }
+.storage-bar .video, .dot.video { background: #8fb7d8; }
+.storage-bar .other, .dot.other { background: #8a7d70; }
+.storage-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; font-size: 14px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+.storage-card .muted { margin: 0; }
+.space-warn { margin: 0; padding: 10px 12px; border-radius: 12px; font-size: 13px; line-height: 1.6;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.import-progress { display: grid; gap: 6px; }
+.import-progress .bar { height: 6px; }
+.backup-notes { margin: 4px 0 0; padding-left: 1.2em; display: grid; gap: 4px; line-height: 1.6; }

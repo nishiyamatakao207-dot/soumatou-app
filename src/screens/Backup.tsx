@@ -121,11 +121,15 @@ export function Backup() {
             記録 {summary?.memories ?? '…'}件 ・ 写真と動画 {summary?.media ?? '…'}個 ・ 約{summary ? mb(summary.bytes) : '…'}
           </p>
           <p className={last ? 'muted small' : 'error small'}>
-            {last ? `最後のバックアップ：${formatDate(last)}` : 'まだバックアップしていません'}
+            {last ? `前回のバックアップ：${formatDate(last)}` : 'まだバックアップしていません'}
           </p>
           <p className="muted small">
-            思い出はこの端末の中だけに保存されています。機種変更・初期化・アプリの削除で消えてしまうので、ときどきバックアップを作って、iCloud Drive などに保管してください。
+            思い出はこの端末の中だけに保存されています（iCloud には自動で保存されません）。ときどきバックアップを作って、iCloud Drive などに保管してください。
           </p>
+          <ul className="backup-notes small">
+            <li>ホーム画面の<strong>アプリのアイコンを削除</strong>したり、iPhoneの設定で Safari の<strong>「履歴とWebサイトデータを消去」</strong>をしたりすると、記録が消えます。</li>
+            <li><strong>機種変更</strong>のときは、新しいiPhoneでこのアプリを開き、下の「バックアップから戻す」で、保管したファイルから戻してください。</li>
+          </ul>
         </section>
 
         {/* ---- 作る ---- */}

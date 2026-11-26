@@ -42,6 +42,8 @@ export interface MediaItem {
   dateSource?: DateSource;
   /** この写真・動画へのコメント（その時の思い） */
   caption?: string;
+  /** 端末の中で使っている大きさ（バイト。本体＋小さい画像）。容量の表示に使う */
+  bytes?: number;
   /** 一覧用の小さい画像があるか */
   hasThumb?: boolean;
   /** 読み込み時に判明：ファイルの中身が見つからない */

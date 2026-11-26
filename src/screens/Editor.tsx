@@ -5,7 +5,9 @@ import { navigate } from '../router';
 import type { DateSource, MediaDraft, Memory } from '../data/types';
 import { Thumb } from '../components/Thumb';
 import { TagPicker } from '../components/TagPicker';
-import { importFile } from '../lib/media';
+import { importFile, isVideoFile } from '../lib/media';
+import { formatBytes, lowSpace } from '../lib/storage';
+import { readSetting } from '../lib/settings';
 import { VoiceError, VoiceText } from '../components/VoiceText';
 import { switchToKeyboardVoice } from '../lib/voiceMethod';
 import { toLocalInput } from '../lib/format';
@@ -40,6 +42,13 @@ export function Editor({ id, voice, keyboard }: { id?: string; voice?: boolean; 
   const [knownTags, setKnownTags] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
+  /** 取り込みの進み具合（動画を縮めているとき） */
+  const [importing, setImporting] = useState<{ label: string; ratio: number | null } | null>(null);
+  /** 端末の残りが少ないとき、残りの目安（バイト） */
+  const [spaceLeft, setSpaceLeft] = useState<number | null>(null);
+  useEffect(() => {
+    lowSpace().then(setSpaceLeft);
+  }, []);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 未来への手紙
   const [isLetter, setIsLetter] = useState(false);
@@ -89,16 +98,29 @@ export function Editor({ id, voice, keyboard }: { id?: string; voice?: boolean; 
     setNotice(undefined);
     const added: MediaDraft[] = [];
     const errors: string[] = [];
-    for (const f of Array.from(files)) {
+    const list = Array.from(files);
+    const videos = list.filter(isVideoFile);
+    const compress = readSetting('videoCompress');
+    let v = 0;
+    for (const f of list) {
+      const isVideo = isVideoFile(f);
+      if (isVideo) v++;
+      const label =
+        isVideo && compress
+          ? `動画を縮めています${videos.length > 1 ? `（${v}/${videos.length}本目）` : ''}…`
+          : `読み込み中…${list.length > 1 ? `（${added.length + errors.length + 1}/${list.length}）` : ''}`;
+      setImporting({ label, ratio: null });
       try {
-        added.push(await importFile(f));
+        added.push(await importFile(f, (r) => setImporting({ label, ratio: r })));
       } catch (e) {
         errors.push(e instanceof Error ? e.message : '読み込めないファイルがありました');
       }
     }
+    setImporting(null);
     setMedia((m) => [...m, ...added]);
     if (errors.length) setNotice([...new Set(errors)].join('\n'));
     setBusy(false);
+    lowSpace().then(setSpaceLeft);
   }
 
   /** 見つからなくなった写真を、別のファイルで差し替える（コメントは残す） */
@@ -325,7 +347,29 @@ export function Editor({ id, voice, keyboard }: { id?: string; voice?: boolean; 
           <input ref={cameraRef} type="file" accept="image/*,video/*" capture="environment" hidden onChange={(e) => (onFiles(e.target.files), (e.target.value = ''))} />
           <input ref={replaceRef} type="file" accept="image/*,video/*" hidden onChange={(e) => (onReplace(e.target.files), (e.target.value = ''))} />
           <input ref={libraryRef} type="file" accept="image/*,video/*" multiple hidden onChange={(e) => (onFiles(e.target.files), (e.target.value = ''))} />
-          {busy && <p className="muted small">読み込み中…</p>}
+          {importing ? (
+            <div className="import-progress" aria-live="polite">
+              <p className="muted small">
+                {importing.label}
+                {importing.ratio != null && ` ${Math.floor(importing.ratio * 100)}%`}
+              </p>
+              {importing.ratio != null && (
+                <div className="bar">
+                  <div className="bar-fill" style={{ transform: `scaleX(${importing.ratio.toFixed(3)})` }} />
+                </div>
+              )}
+              {importing.label.startsWith('動画を縮めて') && <p className="muted small">長い動画は少し時間がかかります。この画面のままお待ちください</p>}
+            </div>
+          ) : (
+            busy && <p className="muted small">読み込み中…</p>
+          )}
+          {spaceLeft != null && (
+            <p className="space-warn">
+              この端末で使える容量が少なくなってきました（あと約{formatBytes(spaceLeft)}）。
+              <a href="#/backup">バックアップ</a>を作っておくと安心です。
+              {!readSetting('videoCompress') && '設定で「動画を縮めて保存する」にすると、容量を節約できます。'}
+            </p>
+          )}
         </section>
 
         <section id="feeling-text">
